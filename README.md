@@ -87,7 +87,9 @@ In Entra ID, tra i redirect URI della registrazione (tipo *Single-page
 application*), va aggiunto l'indirizzo con cui si apre l'app dal container, per
 esempio `http://localhost:8081` o `https://nonconformita.azienda.it`. Per un
 indirizzo diverso da `localhost` serve HTTPS, che di solito si ottiene con un
-reverse proxy davanti al container.
+reverse proxy davanti al container: in HTTP da un altro PC (es.
+`http://server:8081`) il browser non fornisce le funzioni crittografiche
+richieste dall'accesso Microsoft e l'app mostra *Impossibile avviare l'app*.
 
 ## Limiti noti (Microsoft Graph)
 

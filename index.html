@@ -17,6 +17,27 @@
         document.documentElement.setAttribute("data-theme", t);
       } catch (e) {}
     </script>
+    <script>
+      // If the app fails while starting (before React renders anything), show
+      // the reason instead of a blank page.
+      function showStartupError(err) {
+        var root = document.getElementById("root");
+        if (!root || root.childNodes.length) return;
+        var msg = (err && (err.errorMessage || err.message)) || String(err);
+        var hint = window.isSecureContext
+          ? ""
+          : "<p>La pagina è aperta in HTTP da " + location.host + ". L'accesso Microsoft funziona solo in " +
+            "<b>HTTPS</b> oppure da <b>http://localhost</b>: aprire l'app tramite HTTPS (reverse proxy) " +
+            "o direttamente sul server da http://localhost:" + (location.port || "80") + ".</p>";
+        root.innerHTML =
+          '<div style="font-family:Roboto,sans-serif;max-width:640px;margin:64px auto;padding:0 16px;line-height:1.5">' +
+          "<h1 style=\"font-family:Poppins,sans-serif\">Impossibile avviare l'app</h1>" + hint +
+          '<pre style="white-space:pre-wrap;background:rgba(127,127,127,.12);padding:12px;border-radius:8px"></pre></div>';
+        root.querySelector("pre").textContent = msg;
+      }
+      window.addEventListener("error", function (e) { showStartupError(e.error || e.message); });
+      window.addEventListener("unhandledrejection", function (e) { showStartupError(e.reason); });
+    </script>
     <title>Non conformità</title>
   </head>
   <body>
