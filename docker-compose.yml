@@ -1,0 +1,10 @@
+services:
+  non-conformita:
+    build: .
+    image: non-conformita
+    ports:
+      - "8080:80"
+    # Same keys as .env; the redirect URI to register in Entra ID becomes
+    # http://<server>:8080 (or the public URL in front of it).
+    env_file: .env
+    restart: unless-stopped
