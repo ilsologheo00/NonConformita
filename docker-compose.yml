@@ -3,8 +3,9 @@ services:
     build: .
     image: non-conformita
     ports:
-      - "8080:80"
+      # Host port from NC_PORT in .env (default 8081; 8080 is BillingReport).
+      - "${NC_PORT:-8081}:80"
     # Same keys as .env; the redirect URI to register in Entra ID becomes
-    # http://<server>:8080 (or the public URL in front of it).
+    # http://<server>:<NC_PORT> (or the public URL in front of it).
     env_file: .env
     restart: unless-stopped

@@ -73,19 +73,19 @@ inserita nell'immagine: all'avvio il container scrive le variabili `VITE_*`
 in `/env.js`, quindi la stessa immagine va bene per qualsiasi lista.
 
 ```powershell
-docker compose up -d --build      # http://localhost:8080, legge .env
+docker compose up -d --build      # http://localhost:8081 (porta da NC_PORT in .env)
 ```
 
 Oppure senza compose:
 
 ```powershell
 docker build -t non-conformita .
-docker run -d -p 8080:80 --env-file .env non-conformita
+docker run -d -p 8081:80 --env-file .env non-conformita
 ```
 
 In Entra ID, tra i redirect URI della registrazione (tipo *Single-page
 application*), va aggiunto l'indirizzo con cui si apre l'app dal container, per
-esempio `http://localhost:8080` o `https://nonconformita.azienda.it`. Per un
+esempio `http://localhost:8081` o `https://nonconformita.azienda.it`. Per un
 indirizzo diverso da `localhost` serve HTTPS, che di solito si ottiene con un
 reverse proxy davanti al container.
 
