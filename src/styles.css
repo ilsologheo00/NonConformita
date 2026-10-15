@@ -151,6 +151,13 @@ code {
   gap: 2px;
 }
 
+.sidebar-sep {
+  height: 1px;
+  margin: 6px 12px;
+  border: none;
+  background: var(--border);
+}
+
 .sidebar-footer {
   display: flex;
   flex-direction: column;
@@ -932,6 +939,14 @@ input.list-search {
   }
   .sidebar-nav .sidebar-link {
     width: auto;
+  }
+  .sidebar-nav {
+    flex-wrap: wrap;
+  }
+  .sidebar-sep {
+    width: 1px;
+    height: auto;
+    margin: 6px 4px;
   }
   .list-table-wrap {
     max-height: none;

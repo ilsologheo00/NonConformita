@@ -94,13 +94,14 @@ function Shell({ view, onView, children }: { view: View; onView: (v: View) => vo
           <span className="sidebar-brand-name">Qualità</span>
         </div>
         <nav className="sidebar-nav">
-          <button type="button" className={`sidebar-link${view === "form" ? " active" : ""}`} aria-current={view === "form" ? "page" : undefined} onClick={() => onView("form")}>
-            <FormIcon />
-            Nuova non conformità
-          </button>
           <button type="button" className={`sidebar-link${view === "list" ? " active" : ""}`} aria-current={view === "list" ? "page" : undefined} onClick={() => onView("list")}>
             <ListIcon />
             Elenco non conformità
+          </button>
+          <hr className="sidebar-sep" />
+          <button type="button" className={`sidebar-link${view === "form" ? " active" : ""}`} aria-current={view === "form" ? "page" : undefined} onClick={() => onView("form")}>
+            <FormIcon />
+            Nuova non conformità
           </button>
           <button type="button" className={`sidebar-link${view === "actions" ? " active" : ""}`} aria-current={view === "actions" ? "page" : undefined} onClick={() => onView("actions")}>
             <ActionIcon />
