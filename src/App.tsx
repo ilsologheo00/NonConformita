@@ -10,7 +10,7 @@ import { useTheme } from "./theme/ThemeContext";
 import { NcList } from "./components/NcList";
 import { ActionIcon, ActivityIcon, CheckIcon, FormIcon, ListIcon, MoonIcon, PeopleIcon, SignOutIcon, SunIcon } from "./components/icons";
 import { OperatorsDialog } from "./operators/OperatorsDialog";
-import { useOperators } from "./operators/OperatorsContext";
+import { isOperatorField, useOperators } from "./operators/OperatorsContext";
 
 const isPreview = import.meta.env.DEV && new URLSearchParams(window.location.search).has("anteprima");
 
@@ -241,9 +241,12 @@ function closingFields(schema: ListSchema) {
  */
 const isTypeField = (f: ListSchema["fields"][number]) => /^tipo\s*(di\s*)?nc$/.test(f.label.trim().toLowerCase());
 
-/** "Tipo NC" must always be chosen, even if the list column is not marked required. */
-function withRequiredType(schema: ListSchema): ListSchema {
-  return { ...schema, fields: schema.fields.map((f) => (isTypeField(f) ? { ...f, required: true } : f)) };
+/**
+ * "Tipo NC", "In gestione a" and "Prossimo operatore" must always be filled in,
+ * even if the list columns are not marked required.
+ */
+function withRequiredFields(schema: ListSchema): ListSchema {
+  return { ...schema, fields: schema.fields.map((f) => (isTypeField(f) || isOperatorField(f.label) ? { ...f, required: true } : f)) };
 }
 
 function defectFields(schema: ListSchema) {
@@ -299,7 +302,7 @@ function ListForm({ account, def, preview }: { account: Account | null; def: For
     let alive = true;
     const load = account ? token().then((t) => loadSchema(t, def.list)) : import("./preview").then((m) => m.previewSchemas[preview]);
     load
-      .then(withRequiredType)
+      .then(withRequiredFields)
       .then((schema) => {
         if (!alive) return;
         setStatus({ kind: "ready", schema });
