@@ -1,5 +1,5 @@
 import { config } from "../config";
-import { graph, graphAll, GraphError } from "./client";
+import { graph, graphAll } from "./client";
 
 /* Subset of Graph's columnDefinition that the form needs. */
 interface ColumnDefinition {
@@ -109,26 +109,27 @@ export function siteRef(): string {
   return path ? `/sites/${host}:${path}` : `/sites/${host}`;
 }
 
-/** VITE_SP_LIST does not match any list on the site; carries the names that do exist. */
+/** The configured list name does not match any list on the site; carries the names that do exist. */
 export class ListNotFoundError extends Error {
-  constructor(public available: string[]) {
-    super(`Lista “${config.list}” non trovata`);
+  constructor(public list: string, public available: string[]) {
+    super(`Lista “${list}” non trovata`);
   }
 }
 
-export async function loadSchema(token: string): Promise<ListSchema> {
+/**
+ * Lists are matched by display name (or GUID) among the site's lists rather than
+ * addressed by name in the URL: names like "Azioni Correttive/Miglioramenti"
+ * hold characters Graph cannot take in a path.
+ */
+export async function loadSchema(token: string, listName: string = config.list): Promise<ListSchema> {
   const site = await graph<{ id: string }>(token, `${siteRef()}?$select=id`);
-  const list = await graph<{ id: string; displayName: string; webUrl: string }>(
+  const lists = await graphAll<{ id: string; displayName: string; webUrl: string; list?: { hidden?: boolean } }>(
     token,
-    `/sites/${site.id}/lists/${encodeURIComponent(config.list)}?$select=id,displayName,webUrl`
-  ).catch(async (e) => {
-    if (!(e instanceof GraphError) || e.status !== 404) throw e;
-    const lists = await graphAll<{ displayName: string; list?: { hidden?: boolean } }>(
-      token,
-      `/sites/${site.id}/lists?$select=displayName,list`
-    );
-    throw new ListNotFoundError(lists.filter((l) => !l.list?.hidden).map((l) => l.displayName).sort());
-  });
+    `/sites/${site.id}/lists?$select=id,displayName,webUrl,list`
+  );
+  const wanted = listName.trim().toLowerCase();
+  const list = lists.find((l) => l.id.toLowerCase() === wanted) ?? lists.find((l) => l.displayName.trim().toLowerCase() === wanted);
+  if (!list) throw new ListNotFoundError(listName, lists.filter((l) => !l.list?.hidden).map((l) => l.displayName).sort());
 
   // The default content type's columns come back in form order; the list's
   // own column collection does not.
@@ -140,7 +141,8 @@ export async function loadSchema(token: string): Promise<ListSchema> {
   const columns = await graphAll<ColumnDefinition>(token, `/sites/${site.id}/lists/${list.id}/contentTypes/${ct.id}/columns`);
 
   let candidates = columns.filter((c) => !c.hidden && !c.readOnly && !c.calculated && !SYSTEM.has(c.name));
-  if (config.fields.length) {
+  // VITE_SP_FIELDS picks the columns of the non-conformity list only.
+  if (config.fields.length && listName === config.list) {
     const byName = new Map(columns.map((c) => [c.name, c]));
     candidates = config.fields.map((n) => byName.get(n)).filter((c): c is ColumnDefinition => !!c);
   }

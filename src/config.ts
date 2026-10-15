@@ -15,6 +15,8 @@ export const config = {
   site: read("VITE_SP_SITE") || "semantica.sharepoint.com",
   list: read("VITE_SP_LIST"),
   operatorsList: read("VITE_SP_OPERATORS_LIST") || "Operatori NC",
+  actionsList: read("VITE_SP_ACTIONS_LIST") || "Azioni Correttive/Miglioramenti",
+  activitiesList: read("VITE_SP_ACTIVITIES_LIST") || "Attività proposte",
   fields: read("VITE_SP_FIELDS")
     .split(",")
     .map((f) => f.trim())

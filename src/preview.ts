@@ -29,6 +29,28 @@ export const previewSchema: ListSchema = {
   ],
 };
 
+const sampleList = (listName: string, fields: ListSchema["fields"]): ListSchema => ({ siteId: "preview", listId: "preview", listName, listUrl: "#", skipped: [], fields });
+
+/** Sample fields per form, keyed like the app's views. */
+export const previewSchemas: Record<"form" | "actions" | "activities", ListSchema> = {
+  form: previewSchema,
+  actions: sampleList("Anteprima azioni (campi di esempio)", [
+    { name: "Title", label: "Titolo", kind: "text", required: true, maxLength: 255 },
+    { name: "Tipo", label: "Tipo", kind: "choice", radio: true, required: true, choices: ["Azione correttiva", "Miglioramento"] },
+    { name: "Descrizione", label: "Descrizione", kind: "note", required: true },
+    { name: "Responsabile", label: "Responsabile", kind: "text", required: false },
+    { name: "Scadenza", label: "Scadenza", kind: "date", required: false },
+    { name: "Chiusa", label: "Chiusa", kind: "boolean", required: false },
+    { name: "DataChiusura", label: "Data chiusura", kind: "date", required: false },
+  ]),
+  activities: sampleList("Anteprima attività (campi di esempio)", [
+    { name: "Title", label: "Titolo", kind: "text", required: true, maxLength: 255 },
+    { name: "Descrizione", label: "Descrizione", kind: "note", required: true },
+    { name: "Priorita", label: "Priorità", kind: "choice", required: false, choices: ["Bassa", "Media", "Alta"] },
+    { name: "DataProposta", label: "Data proposta", kind: "date", required: false, defaultValue: "[today]" },
+  ]),
+};
+
 function sample(id: number, created: string, createdBy: string, values: Record<string, string>): ListItem {
   const text: Record<string, string> = {};
   const sort: Record<string, string | number> = {};

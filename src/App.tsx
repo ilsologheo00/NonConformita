@@ -8,13 +8,31 @@ import { GraphError } from "./graph/client";
 import { FieldInput } from "./components/FieldInput";
 import { useTheme } from "./theme/ThemeContext";
 import { NcList } from "./components/NcList";
-import { CheckIcon, FormIcon, ListIcon, MoonIcon, PeopleIcon, SignOutIcon, SunIcon } from "./components/icons";
+import { ActionIcon, ActivityIcon, CheckIcon, FormIcon, ListIcon, MoonIcon, PeopleIcon, SignOutIcon, SunIcon } from "./components/icons";
 import { OperatorsDialog } from "./operators/OperatorsDialog";
 import { useOperators } from "./operators/OperatorsContext";
 
 const isPreview = import.meta.env.DEV && new URLSearchParams(window.location.search).has("anteprima");
 
-type View = "form" | "list";
+type View = "form" | "list" | "actions" | "activities";
+type FormView = Exclude<View, "list">;
+
+/** The SharePoint lists the app can add items to, one form each. */
+interface FormDef {
+  list: string;
+  /** .env key that names the list, shown when it is not found. */
+  envKey: keyof ImportMetaEnv;
+  title: string;
+  sent: string;
+  /** Who the sign-in notice says the item is registered for. */
+  noun: string;
+}
+
+const forms: Record<FormView, FormDef> = {
+  form: { list: config.list, envKey: "VITE_SP_LIST", title: "Nuova non conformità", sent: "Non conformità inviata", noun: "la non conformità" },
+  actions: { list: config.actionsList, envKey: "VITE_SP_ACTIONS_LIST", title: "Nuova azione correttiva / miglioramento", sent: "Azione inviata", noun: "l'azione" },
+  activities: { list: config.activitiesList, envKey: "VITE_SP_ACTIVITIES_LIST", title: "Nuova attività proposta", sent: "Attività inviata", noun: "l'attività" },
+};
 
 export function App() {
   const [view, setView] = useState<View>("form");
@@ -28,19 +46,28 @@ export function App() {
 
 type Account = ReturnType<typeof useMsal>["accounts"][number];
 
-/** Both views stay mounted, so a half-filled form survives a look at the list. */
+/**
+ * Views are mounted the first time they are opened and then stay mounted,
+ * so a half-filled form survives a look at another page.
+ */
 function Views({ view, account }: { view: View; account: Account | null }) {
   const token = useCallback(() => (account ? getToken(account) : Promise.resolve("preview")), [account]);
-  const [listOpened, setListOpened] = useState(false);
+  const [opened, setOpened] = useState<Set<View>>(() => new Set([view]));
   useEffect(() => {
-    if (view === "list") setListOpened(true);
+    setOpened((o) => (o.has(view) ? o : new Set(o).add(view)));
   }, [view]);
+  const listOpened = opened.has("list");
 
   return (
     <>
-      <div hidden={view !== "form"}>
-        <NcForm account={account} />
-      </div>
+      {(Object.keys(forms) as FormView[]).map(
+        (key) =>
+          opened.has(key) && (
+            <div key={key} hidden={view !== key}>
+              <ListForm account={account} def={forms[key]} preview={key} />
+            </div>
+          )
+      )}
       {listOpened && (
         <div hidden={view !== "list"}>
           <NcList getToken={token} active={view === "list"} explain={explain} />
@@ -74,6 +101,14 @@ function Shell({ view, onView, children }: { view: View; onView: (v: View) => vo
           <button type="button" className={`sidebar-link${view === "list" ? " active" : ""}`} aria-current={view === "list" ? "page" : undefined} onClick={() => onView("list")}>
             <ListIcon />
             Elenco non conformità
+          </button>
+          <button type="button" className={`sidebar-link${view === "actions" ? " active" : ""}`} aria-current={view === "actions" ? "page" : undefined} onClick={() => onView("actions")}>
+            <ActionIcon />
+            Nuova azione correttiva
+          </button>
+          <button type="button" className={`sidebar-link${view === "activities" ? " active" : ""}`} aria-current={view === "activities" ? "page" : undefined} onClick={() => onView("activities")}>
+            <ActivityIcon />
+            Nuova attività proposta
           </button>
         </nav>
         <div className="sidebar-footer">
@@ -135,11 +170,12 @@ function Authed({ view }: { view: View }) {
   if (inProgress !== InteractionStatus.None && !signedIn) return <div className="page"><p className="muted">Accesso in corso…</p></div>;
 
   if (!signedIn) {
+    const def = forms[view === "list" ? "form" : view];
     return (
       <div className="page">
-        <h1>Nuova non conformità</h1>
+        <h1>{def.title}</h1>
         <div className="notice">
-          <p>Accedi con il tuo account Semantica: la non conformità verrà registrata a tuo nome nella lista SharePoint.</p>
+          <p>Accedi con il tuo account Semantica: {def.noun} verrà registrata a tuo nome nella lista SharePoint.</p>
           {signInError && (
             <p className="status-error">
               L'accesso precedente non è riuscito. Microsoft ha risposto: {signInError}
@@ -238,17 +274,17 @@ function isHidden(schema: ListSchema, values: Record<string, FieldValue>, name: 
   return !!defect && name === hiddenDefect(defect, values);
 }
 
-function explain(e: unknown): string {
-  if (e instanceof ListNotFoundError) return `La lista “${config.list}” non esiste sul sito “${config.site}”.`;
+function explain(e: unknown, def: Pick<FormDef, "list" | "envKey"> = forms.form): string {
+  if (e instanceof ListNotFoundError) return `La lista “${e.list}” non esiste sul sito “${config.site}”.`;
   if (e instanceof GraphError) {
     if (e.status === 403) return "Il tuo account non ha i permessi per scrivere su questa lista SharePoint.";
-    if (e.status === 404) return `Sito o lista non trovati: controlla VITE_SP_SITE (“${config.site}”) e VITE_SP_LIST (“${config.list}”).`;
+    if (e.status === 404) return `Sito o lista non trovati: controlla VITE_SP_SITE (“${config.site}”) e ${def.envKey} (“${def.list}”).`;
     return `SharePoint ha risposto ${e.status}: ${e.message}`;
   }
   return (e as Error).message || String(e);
 }
 
-function NcForm({ account }: { account: Account | null }) {
+function ListForm({ account, def, preview }: { account: Account | null; def: FormDef; preview: FormView }) {
   const token = useCallback(() => (account ? getToken(account) : Promise.resolve("preview")), [account]);
   const [status, setStatus] = useState<Status>({ kind: "loading" });
   const [values, setValues] = useState<Record<string, FieldValue>>({});
@@ -260,7 +296,7 @@ function NcForm({ account }: { account: Account | null }) {
 
   useEffect(() => {
     let alive = true;
-    const load = account ? token().then(loadSchema) : import("./preview").then((m) => m.previewSchema);
+    const load = account ? token().then((t) => loadSchema(t, def.list)) : import("./preview").then((m) => m.previewSchemas[preview]);
     load
       .then(withRequiredType)
       .then((schema) => {
@@ -268,11 +304,11 @@ function NcForm({ account }: { account: Account | null }) {
         setStatus({ kind: "ready", schema });
         setValues(initialValues(schema));
       })
-      .catch((e) => alive && setStatus({ kind: "error", message: explain(e), lists: e instanceof ListNotFoundError ? e.available : undefined }));
+      .catch((e) => alive && setStatus({ kind: "error", message: explain(e, def), lists: e instanceof ListNotFoundError ? e.available : undefined }));
     return () => {
       alive = false;
     };
-  }, [token, account]);
+  }, [token, account, def, preview]);
 
   const schema = status.kind === "ready" ? status.schema : null;
   const missingRequired = useMemo(() => (schema ? schema.fields.filter((f) => f.required && f.kind !== "boolean" && !isHidden(schema, values, f.name) && isEmpty(values[f.name])) : []), [schema, values]);
@@ -287,7 +323,7 @@ function NcForm({ account }: { account: Account | null }) {
           {status.lists && (
             <>
               <p>
-                Liste presenti su “{config.site}”. Copia il nome giusto in VITE_SP_LIST nel file .env e riavvia l'app:
+                Liste presenti su “{config.site}”. Copia il nome giusto in {def.envKey} nel file .env e riavvia l'app:
               </p>
               <ul>
                 {status.lists.map((name) => (
@@ -344,7 +380,7 @@ function NcForm({ account }: { account: Account | null }) {
       }
       setCreated(await createItem(await token(), s, values));
     } catch (err) {
-      setSendError(explain(err));
+      setSendError(explain(err, def));
     } finally {
       setSending(false);
     }
@@ -358,7 +394,7 @@ function NcForm({ account }: { account: Account | null }) {
             <CheckIcon />
           </span>
           <div>
-            <h1>Non conformità inviata</h1>
+            <h1>{def.sent}</h1>
             <p className="muted">
               Registrata in “{s.listName}” con ID {created.id}.
             </p>
@@ -389,7 +425,7 @@ function NcForm({ account }: { account: Account | null }) {
   return (
     <form className="page page-form" ref={formRef} onSubmit={submit} noValidate>
       <header className="form-head">
-        <h1>Nuova non conformità</h1>
+        <h1>{def.title}</h1>
         <p className="muted">
           Verrà creata nella lista{" "}
           <a href={s.listUrl} target="_blank" rel="noreferrer">
