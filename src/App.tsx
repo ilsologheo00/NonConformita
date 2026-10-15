@@ -7,21 +7,52 @@ import { createItem, isEmpty, ListNotFoundError, loadSchema, type FieldValue, ty
 import { GraphError } from "./graph/client";
 import { FieldInput } from "./components/FieldInput";
 import { useTheme } from "./theme/ThemeContext";
+import { NcList } from "./components/NcList";
 import { CheckIcon, FormIcon, ListIcon, MoonIcon, PeopleIcon, SignOutIcon, SunIcon } from "./components/icons";
 import { OperatorsDialog } from "./operators/OperatorsDialog";
 import { useOperators } from "./operators/OperatorsContext";
 
 const isPreview = import.meta.env.DEV && new URLSearchParams(window.location.search).has("anteprima");
 
+type View = "form" | "list";
+
 export function App() {
+  const [view, setView] = useState<View>("form");
   const missing = missingConfig();
-  if (isPreview) return <Shell><NcForm account={null} /></Shell>;
-  return <Shell>{missing.length ? <SetupNeeded missing={missing} /> : <Authed />}</Shell>;
+  return (
+    <Shell view={view} onView={setView}>
+      {isPreview ? <Views view={view} account={null} /> : missing.length ? <SetupNeeded missing={missing} /> : <Authed view={view} />}
+    </Shell>
+  );
+}
+
+type Account = ReturnType<typeof useMsal>["accounts"][number];
+
+/** Both views stay mounted, so a half-filled form survives a look at the list. */
+function Views({ view, account }: { view: View; account: Account | null }) {
+  const token = useCallback(() => (account ? getToken(account) : Promise.resolve("preview")), [account]);
+  const [listOpened, setListOpened] = useState(false);
+  useEffect(() => {
+    if (view === "list") setListOpened(true);
+  }, [view]);
+
+  return (
+    <>
+      <div hidden={view !== "form"}>
+        <NcForm account={account} />
+      </div>
+      {listOpened && (
+        <div hidden={view !== "list"}>
+          <NcList getToken={token} active={view === "list"} explain={explain} />
+        </div>
+      )}
+    </>
+  );
 }
 
 /* ---- Shell ----------------------------------------------------------------- */
 
-function Shell({ children }: { children: React.ReactNode }) {
+function Shell({ view, onView, children }: { view: View; onView: (v: View) => void; children: React.ReactNode }) {
   const { theme, toggle } = useTheme();
   const { instance, accounts } = useMsal();
   const account = accounts[0];
@@ -36,10 +67,14 @@ function Shell({ children }: { children: React.ReactNode }) {
           <span className="sidebar-brand-name">Qualità</span>
         </div>
         <nav className="sidebar-nav">
-          <span className="sidebar-link active">
+          <button type="button" className={`sidebar-link${view === "form" ? " active" : ""}`} aria-current={view === "form" ? "page" : undefined} onClick={() => onView("form")}>
             <FormIcon />
             Nuova non conformità
-          </span>
+          </button>
+          <button type="button" className={`sidebar-link${view === "list" ? " active" : ""}`} aria-current={view === "list" ? "page" : undefined} onClick={() => onView("list")}>
+            <ListIcon />
+            Elenco non conformità
+          </button>
         </nav>
         <div className="sidebar-footer">
           {account && (
@@ -93,7 +128,7 @@ function SetupNeeded({ missing }: { missing: string[] }) {
   );
 }
 
-function Authed() {
+function Authed({ view }: { view: View }) {
   const { instance, accounts, inProgress } = useMsal();
   const signedIn = useIsAuthenticated();
 
@@ -118,7 +153,7 @@ function Authed() {
     );
   }
 
-  return <NcForm account={accounts[0]} />;
+  return <Views view={view} account={accounts[0]} />;
 }
 
 /* ---- The form -------------------------------------------------------------- */
@@ -167,9 +202,16 @@ function closingFields(schema: ListSchema) {
  * "Tipo NC" and the two defect columns that depend on it: "Difetto Fornitore"
  * for an NC against a supplier, "Difetto Riscontrato" for every other type.
  */
+const isTypeField = (f: ListSchema["fields"][number]) => /^tipo\s*(di\s*)?nc$/.test(f.label.trim().toLowerCase());
+
+/** "Tipo NC" must always be chosen, even if the list column is not marked required. */
+function withRequiredType(schema: ListSchema): ListSchema {
+  return { ...schema, fields: schema.fields.map((f) => (isTypeField(f) ? { ...f, required: true } : f)) };
+}
+
 function defectFields(schema: ListSchema) {
   const norm = (s: string) => s.trim().toLowerCase();
-  const type = schema.fields.find((f) => /^tipo\s*(di\s*)?nc$/.test(norm(f.label)));
+  const type = schema.fields.find(isTypeField);
   const supplier = schema.fields.find((f) => /^difetto\s+fornitore$/.test(norm(f.label)));
   const found = schema.fields.find((f) => /^difetto\s+riscontrato$/.test(norm(f.label)));
   return type && supplier && found ? { type: type.name, supplier: supplier.name, found: found.name } : null;
@@ -206,7 +248,7 @@ function explain(e: unknown): string {
   return (e as Error).message || String(e);
 }
 
-function NcForm({ account }: { account: ReturnType<typeof useMsal>["accounts"][number] | null }) {
+function NcForm({ account }: { account: Account | null }) {
   const token = useCallback(() => (account ? getToken(account) : Promise.resolve("preview")), [account]);
   const [status, setStatus] = useState<Status>({ kind: "loading" });
   const [values, setValues] = useState<Record<string, FieldValue>>({});
@@ -220,6 +262,7 @@ function NcForm({ account }: { account: ReturnType<typeof useMsal>["accounts"][n
     let alive = true;
     const load = account ? token().then(loadSchema) : import("./preview").then((m) => m.previewSchema);
     load
+      .then(withRequiredType)
       .then((schema) => {
         if (!alive) return;
         setStatus({ kind: "ready", schema });

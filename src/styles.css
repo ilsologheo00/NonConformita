@@ -311,6 +311,7 @@ button.sidebar-link:hover {
 
 input[type="text"],
 input[type="url"],
+input[type="search"],
 input[type="number"],
 input[type="date"],
 input[type="datetime-local"],
@@ -796,6 +797,113 @@ textarea:focus-visible {
   margin-top: 18px;
 }
 
+/* -- List --------------------------------------------------------------- */
+
+.page.page-list {
+  max-width: none;
+}
+
+.list-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.list-head p {
+  margin: 0;
+  font-size: 0.92rem;
+}
+
+.list-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.list-actions .btn-secondary {
+  padding: 9px 16px;
+}
+
+input.list-search {
+  max-width: 360px;
+  margin-bottom: 14px;
+}
+
+/* Scrolls on its own in both directions, so the header row can stay in view. */
+.list-table-wrap {
+  max-height: calc(100vh - 230px);
+  overflow: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.list-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+}
+
+.list-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 0;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border-strong);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.list-table th button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 10px 12px;
+  border: none;
+  background: none;
+  color: var(--text);
+  font: 600 0.82rem var(--font-heading);
+  text-align: left;
+  cursor: pointer;
+}
+
+.list-table th button:hover {
+  color: var(--accent);
+}
+
+.sort-mark {
+  min-width: 0.8em;
+  color: var(--accent);
+}
+
+.list-table td {
+  max-width: 320px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.list-table tbody tr:hover td {
+  background: var(--accent-soft);
+}
+
+.list-table td a {
+  font-weight: 600;
+}
+
+.list-empty {
+  margin: 0;
+  padding: 24px 14px;
+  text-align: center;
+}
+
 /* -- Small screens --------------------------------------------------------- */
 
 @media (max-width: 760px) {
@@ -817,7 +925,16 @@ textarea:focus-visible {
     padding: 0 8px 0 0;
   }
   .sidebar-nav {
-    display: none;
+    flex-direction: row;
+    order: 1;
+    width: 100%;
+    margin-top: 6px;
+  }
+  .sidebar-nav .sidebar-link {
+    width: auto;
+  }
+  .list-table-wrap {
+    max-height: none;
   }
   .sidebar-footer {
     flex-direction: row;

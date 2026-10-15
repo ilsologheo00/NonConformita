@@ -1,4 +1,4 @@
-import type { ListSchema } from "./graph/sharepoint";
+import type { ListItem, ListSchema } from "./graph/sharepoint";
 
 // Dev-only sample (open http://localhost:5174/?anteprima) to check layout and
 // themes without signing in. These are NOT the real SharePoint columns: the
@@ -28,3 +28,19 @@ export const previewSchema: ListSchema = {
     { name: "DataChiusura", label: "Data chiusura", kind: "datetime", required: false },
   ],
 };
+
+function sample(id: number, created: string, createdBy: string, values: Record<string, string>): ListItem {
+  const text: Record<string, string> = {};
+  const sort: Record<string, string | number> = {};
+  for (const f of previewSchema.fields) {
+    text[f.name] = values[f.name] ?? "";
+    sort[f.name] = f.kind === "date" && values[f.name] ? values[f.name].split("/").reverse().join("-") : (values[f.name] ?? "").toLowerCase();
+  }
+  return { id: String(id), created, createdBy, text, sort };
+}
+
+export const previewItems: ListItem[] = [
+  sample(1, "2026-09-02T08:14:00Z", "Mario Rossi", { Title: "Graffi su carter", Data: "02/09/2026", TipoNC: "NC a fornitore", DifettoFornitore: "Estetico", Gravita: "Media", Descrizione: "Carter lotto 2231 con graffi profondi sul lato visibile.", Quantita: "12", Bloccato: "Sì", Lotto: "2231", Fornitore: "Metalli Srl", Chiusa: "Sì", DataChiusura: "10/09/2026 16:30" }),
+  sample(2, "2026-09-18T13:40:00Z", "Laura Bianchi", { Title: "Coppia di serraggio errata", Data: "18/09/2026", TipoNC: "NC interna", DifettoRiscontrato: "Montaggio", Gravita: "Alta", Reparti: "Produzione", Descrizione: "Viti M6 serrate a 6 Nm invece di 9 Nm.", Quantita: "40", Bloccato: "Sì", Chiusa: "No" }),
+  sample(3, "2026-10-07T09:05:00Z", "Mario Rossi", { Title: "Etichetta mancante", Data: "07/10/2026", TipoNC: "NC da cliente", DifettoRiscontrato: "Collaudo", Gravita: "Bassa", Reparti: "Magazzino", Descrizione: "Il cliente segnala 3 colli senza etichetta di lotto.", Quantita: "3", Bloccato: "No", Chiusa: "No" }),
+];

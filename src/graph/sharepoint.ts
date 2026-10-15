@@ -273,3 +273,86 @@ export async function createItem(
     body: { fields },
   });
 }
+
+/* ---- Read ---------------------------------------------------------------- */
+
+export interface ListItem {
+  id: string;
+  created: string;
+  createdBy: string;
+  /** Display text per column, keyed by internal name. */
+  text: Record<string, string>;
+  /** Value to sort by per column: numbers and ISO dates sort as themselves. */
+  sort: Record<string, string | number>;
+}
+
+type LookupValue = { LookupId?: number | string; LookupValue?: string; Email?: string };
+
+const dateFmt = new Intl.DateTimeFormat("it-IT", { dateStyle: "short" });
+const dateTimeFmt = new Intl.DateTimeFormat("it-IT", { dateStyle: "short", timeStyle: "short" });
+
+function cell(f: Field, raw: Record<string, unknown>, people: Map<string, string>): [string, string | number] {
+  const v = raw[f.name];
+  const lookupId = raw[`${f.name}LookupId`];
+  if (Array.isArray(v)) {
+    const text = v.map((x) => (typeof x === "object" && x ? (x as LookupValue).LookupValue ?? "" : String(x))).filter(Boolean).join(", ");
+    return [text, text.toLowerCase()];
+  }
+  switch (f.kind) {
+    case "boolean":
+      return v === undefined || v === null ? ["", ""] : [v ? "Sì" : "No", v ? 1 : 0];
+    case "number":
+      return typeof v === "number" ? [v.toLocaleString("it-IT"), v] : ["", ""];
+    case "date":
+    case "datetime": {
+      if (typeof v !== "string") return ["", ""];
+      return [(f.kind === "date" ? dateFmt : dateTimeFmt).format(new Date(v)), v];
+    }
+    case "person": {
+      const name = lookupId !== undefined ? people.get(String(lookupId)) ?? `#${lookupId}` : "";
+      return [name, name.toLowerCase()];
+    }
+    case "lookup": {
+      const text = typeof v === "string" ? v : lookupId !== undefined ? `#${lookupId}` : "";
+      return [text, text.toLowerCase()];
+    }
+    case "url": {
+      const url = v && typeof v === "object" ? (v as { Url?: string; Description?: string }) : null;
+      const text = url ? url.Description || url.Url || "" : typeof v === "string" ? v : "";
+      return [text, text.toLowerCase()];
+    }
+    case "note": {
+      // Rich-text columns come back as HTML.
+      const text = typeof v === "string" ? new DOMParser().parseFromString(v, "text/html").body.textContent?.trim() ?? "" : "";
+      return [text, text.toLowerCase()];
+    }
+    default: {
+      const text = v === undefined || v === null ? "" : String(v);
+      return [text, text.toLowerCase()];
+    }
+  }
+}
+
+/** Every item of the list, with the form's columns turned into readable text. */
+export async function loadItems(token: string, schema: ListSchema): Promise<ListItem[]> {
+  const [items, people] = await Promise.all([
+    graphAll<{ id: string; createdDateTime: string; createdBy?: { user?: { displayName?: string } }; fields: Record<string, unknown> }>(
+      token,
+      `/sites/${schema.siteId}/lists/${schema.listId}/items?$expand=fields&$top=500`
+    ),
+    // Single-person columns only carry the user's id in the site's user list.
+    schema.fields.some((f) => f.kind === "person")
+      ? graphAll<{ id: string; fields: { Title?: string } }>(
+          token,
+          `/sites/${schema.siteId}/lists/User Information List/items?$expand=fields($select=Title)&$top=999`
+        ).then((users) => new Map(users.map((u) => [u.id, u.fields.Title ?? `#${u.id}`])))
+      : Promise.resolve(new Map<string, string>()),
+  ]);
+
+  return items.map((i) => {
+    const text: Record<string, string> = {};
+    const sort: Record<string, string | number> = {};
+    for (const f of schema.fields) [text[f.name], sort[f.name]] = cell(f, i.fields, people);
+    return { id: i.id, created: i.createdDateTime, createdBy: i.createdBy?.user?.displayName ?? "", text, sort };
+  });
+}
