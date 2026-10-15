@@ -138,7 +138,14 @@ export async function loadSchema(token: string, listName: string = config.list):
     `/sites/${site.id}/lists/${list.id}/contentTypes?$select=id,name,hidden`
   );
   const ct = types.find((t) => !t.hidden && !t.id.startsWith("0x0120")) ?? types[0];
-  const columns = await graphAll<ColumnDefinition>(token, `/sites/${site.id}/lists/${list.id}/contentTypes/${ct.id}/columns`);
+  const [ctColumns, listColumns] = await Promise.all([
+    graphAll<ColumnDefinition>(token, `/sites/${site.id}/lists/${list.id}/contentTypes/${ct.id}/columns`),
+    graphAll<ColumnDefinition>(token, `/sites/${site.id}/lists/${list.id}/columns`),
+  ]);
+  // A column deleted and re-created on the list may be left out of the content
+  // type: it still belongs on the form, after the content type's own columns.
+  const inCt = new Set(ctColumns.map((c) => c.name));
+  const columns = [...ctColumns, ...listColumns.filter((c) => !inCt.has(c.name))];
 
   let candidates = columns.filter((c) => !c.hidden && !c.readOnly && !c.calculated && !SYSTEM.has(c.name));
   // VITE_SP_FIELDS picks the columns of the non-conformity list only.
