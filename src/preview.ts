@@ -12,7 +12,9 @@ export const previewSchema: ListSchema = {
   fields: [
     { name: "Title", label: "Titolo", kind: "text", required: true, maxLength: 255 },
     { name: "Data", label: "Data rilevazione", kind: "date", required: true, defaultValue: "[today]" },
-    { name: "Tipo", label: "Tipologia", kind: "choice", required: true, choices: ["Interna", "Fornitore", "Cliente"] },
+    { name: "TipoNC", label: "Tipo NC", kind: "choice", required: true, choices: ["NC interna", "NC a fornitore", "NC da cliente"] },
+    { name: "DifettoFornitore", label: "Difetto Fornitore", kind: "choice", required: false, choices: ["Dimensionale", "Estetico", "Documentale"] },
+    { name: "DifettoRiscontrato", label: "Difetto Riscontrato", kind: "choice", required: false, choices: ["Montaggio", "Lavorazione", "Collaudo"] },
     { name: "Gravita", label: "Gravità", kind: "choice", radio: true, required: false, choices: ["Bassa", "Media", "Alta"] },
     { name: "Reparti", label: "Reparti coinvolti", kind: "multichoice", required: false, choices: ["Produzione", "Magazzino", "Ufficio tecnico", "Acquisti"] },
     { name: "Descrizione", label: "Descrizione", kind: "note", required: true, description: "Cosa è stato rilevato, dove e su quale lotto." },

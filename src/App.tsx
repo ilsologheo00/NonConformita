@@ -163,10 +163,37 @@ function closingFields(schema: ListSchema) {
   return closed && date ? { closed: closed.name, date: date.name, dateKind: date.kind as "date" | "datetime" } : null;
 }
 
-/** The closing date is shown (and required, if the column is) only once the NC is marked closed. */
+/**
+ * "Tipo NC" and the two defect columns that depend on it: "Difetto Fornitore"
+ * for an NC against a supplier, "Difetto Riscontrato" for every other type.
+ */
+function defectFields(schema: ListSchema) {
+  const norm = (s: string) => s.trim().toLowerCase();
+  const type = schema.fields.find((f) => /^tipo\s*(di\s*)?nc$/.test(norm(f.label)));
+  const supplier = schema.fields.find((f) => /^difetto\s+fornitore$/.test(norm(f.label)));
+  const found = schema.fields.find((f) => /^difetto\s+riscontrato$/.test(norm(f.label)));
+  return type && supplier && found ? { type: type.name, supplier: supplier.name, found: found.name } : null;
+}
+
+function isSupplierNc(v: FieldValue | undefined): boolean {
+  const all = Array.isArray(v) ? v : [v];
+  return all.some((x) => typeof x === "string" && /fornitor/i.test(x));
+}
+
+/** The defect column that does not apply to the chosen "Tipo NC". */
+function hiddenDefect(defect: NonNullable<ReturnType<typeof defectFields>>, values: Record<string, FieldValue>) {
+  return isSupplierNc(values[defect.type]) ? defect.found : defect.supplier;
+}
+
+/**
+ * The closing date is shown (and required, if the column is) only once the NC is marked closed;
+ * only the defect column matching "Tipo NC" is shown.
+ */
 function isHidden(schema: ListSchema, values: Record<string, FieldValue>, name: string): boolean {
   const closing = closingFields(schema);
-  return !!closing && name === closing.date && values[closing.closed] !== true;
+  if (closing && name === closing.date && values[closing.closed] !== true) return true;
+  const defect = defectFields(schema);
+  return !!defect && name === hiddenDefect(defect, values);
 }
 
 function explain(e: unknown): string {
@@ -233,12 +260,18 @@ function NcForm({ account }: { account: ReturnType<typeof useMsal>["accounts"][n
   const s = status.schema;
 
   const closing = closingFields(s);
+  const defect = defectFields(s);
 
   function set(name: string, v: FieldValue) {
     setValues((prev) => {
       const next = { ...prev, [name]: v };
       // Switching "Chiusa" on stamps the closing date with this moment; off clears it.
       if (closing && name === closing.closed) next[closing.date] = v === true ? today(closing.dateKind) : "";
+      // Changing "Tipo NC" clears the defect column that no longer applies, so it is not sent.
+      if (defect && name === defect.type) {
+        const off = hiddenDefect(defect, next);
+        next[off] = initialValues(s)[off];
+      }
       return next;
     });
     if (errors[name]) setErrors(({ [name]: _, ...rest }) => rest);
