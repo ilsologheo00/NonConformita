@@ -39,7 +39,7 @@ export function App() {
   const missing = missingConfig();
   return (
     <Shell view={view} onView={setView}>
-      {isPreview ? <Views view={view} account={null} /> : missing.length ? <SetupNeeded missing={missing} /> : <Authed view={view} />}
+      {isPreview ? <Views view={view} account={null} onView={setView} /> : missing.length ? <SetupNeeded missing={missing} /> : <Authed view={view} onView={setView} />}
     </Shell>
   );
 }
@@ -50,9 +50,20 @@ type Account = ReturnType<typeof useMsal>["accounts"][number];
  * Views are mounted the first time they are opened and then stay mounted,
  * so a half-filled form survives a look at another page.
  */
-function Views({ view, account }: { view: View; account: Account | null }) {
+function Views({ view, account, onView }: { view: View; account: Account | null; onView: (v: View) => void }) {
   const token = useCallback(() => (account ? getToken(account) : Promise.resolve("preview")), [account]);
   const [opened, setOpened] = useState<Set<View>>(() => new Set([view]));
+  // The NC just sent with "Crea azione correttiva" on, handed to the actions form.
+  const [linkNc, setLinkNc] = useState<LinkNc | null>(null);
+  const onNcCreated = useCallback(
+    (id: string, schema: ListSchema, values: Record<string, FieldValue>) => {
+      if (!wantsCorrectiveAction(schema, values)) return;
+      setLinkNc((l) => ({ id, seq: (l?.seq ?? 0) + 1 }));
+      onView("actions");
+      window.scrollTo(0, 0);
+    },
+    [onView]
+  );
   useEffect(() => {
     setOpened((o) => (o.has(view) ? o : new Set(o).add(view)));
   }, [view]);
@@ -64,7 +75,14 @@ function Views({ view, account }: { view: View; account: Account | null }) {
         (key) =>
           opened.has(key) && (
             <div key={key} hidden={view !== key}>
-              <ListForm account={account} def={forms[key]} preview={key} />
+              <ListForm
+                account={account}
+                def={forms[key]}
+                preview={key}
+                active={view === key}
+                onCreated={key === "form" ? onNcCreated : undefined}
+                linkNc={key === "actions" ? linkNc : null}
+              />
             </div>
           )
       )}
@@ -164,7 +182,7 @@ function SetupNeeded({ missing }: { missing: string[] }) {
   );
 }
 
-function Authed({ view }: { view: View }) {
+function Authed({ view, onView }: { view: View; onView: (v: View) => void }) {
   const { instance, accounts, inProgress } = useMsal();
   const signedIn = useIsAuthenticated();
 
@@ -190,7 +208,7 @@ function Authed({ view }: { view: View }) {
     );
   }
 
-  return <Views view={view} account={accounts[0]} />;
+  return <Views view={view} account={accounts[0]} onView={onView} />;
 }
 
 /* ---- The form -------------------------------------------------------------- */
@@ -278,17 +296,48 @@ function isHidden(schema: ListSchema, values: Record<string, FieldValue>, name: 
   return !!defect && name === hiddenDefect(defect, values);
 }
 
-function explain(e: unknown, def: Pick<FormDef, "list" | "envKey"> = forms.form): string {
+/**
+ * sending: the list was already read when the form opened, so a 404 is about
+ * something else (a person, a lookup value...) and SharePoint's own words say what.
+ */
+function explain(e: unknown, def: Pick<FormDef, "list" | "envKey"> = forms.form, sending = false): string {
   if (e instanceof ListNotFoundError) return `La lista “${e.list}” non esiste sul sito “${config.site}”.`;
   if (e instanceof GraphError) {
     if (e.status === 403) return "Il tuo account non ha i permessi per scrivere su questa lista SharePoint.";
+    if (e.status === 404 && sending) return `Invio non riuscito, SharePoint non trova un elemento (${e.code}): ${e.message}`;
     if (e.status === 404) return `Sito o lista non trovati: controlla VITE_SP_SITE (“${config.site}”) e ${def.envKey} (“${def.list}”).`;
     return `SharePoint ha risposto ${e.status}: ${e.message}`;
   }
   return (e as Error).message || String(e);
 }
 
-function ListForm({ account, def, preview }: { account: Account | null; def: FormDef; preview: FormView }) {
+/** "Crea azione correttiva" switched on in the NC form. */
+function wantsCorrectiveAction(schema: ListSchema, values: Record<string, FieldValue>): boolean {
+  const flag = schema.fields.find((f) => f.kind === "boolean" && /azion[ei]\s+correttiv/.test(f.label.trim().toLowerCase()));
+  return !!flag && values[flag.name] === true;
+}
+
+/** "NC collegata": the lookup from an action to its non-conformity. */
+const ncLinkField = (schema: ListSchema) => schema.fields.find((f) => f.kind === "lookup" && /^nc\b/.test(f.label.trim().toLowerCase()));
+
+/** A non-conformity to link a new action to; seq tells two requests for the same NC apart. */
+type LinkNc = { id: string; seq: number };
+
+function ListForm({
+  account,
+  def,
+  preview,
+  active,
+  onCreated,
+  linkNc,
+}: {
+  account: Account | null;
+  def: FormDef;
+  preview: FormView;
+  active: boolean;
+  onCreated?: (id: string, schema: ListSchema, values: Record<string, FieldValue>) => void;
+  linkNc?: LinkNc | null;
+}) {
   const token = useCallback(() => (account ? getToken(account) : Promise.resolve("preview")), [account]);
   const [status, setStatus] = useState<Status>({ kind: "loading" });
   const [values, setValues] = useState<Record<string, FieldValue>>({});
@@ -297,6 +346,13 @@ function ListForm({ account, def, preview }: { account: Account | null; def: For
   const [sendError, setSendError] = useState("");
   const [created, setCreated] = useState<{ id: string; webUrl: string } | null>(null);
   const formRef = useRef<HTMLFormElement>(null);
+  // Bumped each time the form is shown, so lookups pick up items added meanwhile (e.g. a new NC).
+  const [shown, setShown] = useState(0);
+  const wasActive = useRef(active);
+  useEffect(() => {
+    if (active && !wasActive.current) setShown((n) => n + 1);
+    wasActive.current = active;
+  }, [active]);
 
   useEffect(() => {
     let alive = true;
@@ -313,6 +369,22 @@ function ListForm({ account, def, preview }: { account: Account | null; def: For
       alive = false;
     };
   }, [token, account, def, preview]);
+
+  // A fresh action for the NC just created, with "NC collegata" already set.
+  const [linkedTo, setLinkedTo] = useState("");
+  const appliedLink = useRef(0);
+  useEffect(() => {
+    if (status.kind !== "ready" || !linkNc || appliedLink.current === linkNc.seq) return;
+    appliedLink.current = linkNc.seq;
+    const field = ncLinkField(status.schema);
+    const fresh = initialValues(status.schema);
+    if (field) fresh[field.name] = field.multiple ? [linkNc.id] : linkNc.id;
+    setValues(fresh);
+    setErrors({});
+    setSendError("");
+    setCreated(null);
+    setLinkedTo(field ? linkNc.id : "");
+  }, [status, linkNc]);
 
   const schema = status.kind === "ready" ? status.schema : null;
   const missingRequired = useMemo(() => (schema ? schema.fields.filter((f) => f.required && f.kind !== "boolean" && !isHidden(schema, values, f.name) && isEmpty(values[f.name])) : []), [schema, values]);
@@ -380,11 +452,15 @@ function ListForm({ account, def, preview }: { account: Account | null; def: For
       if (!account) {
         await new Promise((r) => setTimeout(r, 600));
         setCreated({ id: "0 (anteprima, nulla è stato inviato)", webUrl: "#" });
+        onCreated?.("0", s, values);
         return;
       }
-      setCreated(await createItem(await token(), s, values));
+      const item = await createItem(await token(), s, values);
+      setCreated(item);
+      setLinkedTo("");
+      onCreated?.(item.id, s, values);
     } catch (err) {
-      setSendError(explain(err, def));
+      setSendError(explain(err, def, true));
     } finally {
       setSending(false);
     }
@@ -437,11 +513,12 @@ function ListForm({ account, def, preview }: { account: Account | null; def: For
           </a>
           . I campi con <span className="req-mark">*</span> sono obbligatori.
         </p>
+        {linkedTo && <p className="notice">Collegata alla non conformità n. {linkedTo} appena inserita.</p>}
       </header>
 
       <div className="sheet">
         {s.fields.filter((f) => !isHidden(s, values, f.name)).map((f) => (
-          <FieldInput key={f.name} field={f} value={values[f.name]} error={errors[f.name]} siteId={s.siteId} getToken={token} onChange={(v) => set(f.name, v)} />
+          <FieldInput key={f.name} field={f} value={values[f.name]} error={errors[f.name]} siteId={s.siteId} getToken={token} refreshKey={shown} onChange={(v) => set(f.name, v)} />
         ))}
         {s.skipped.length > 0 && <p className="field-hint">Non compilabili da qui: {s.skipped.join(", ")}. Puoi completarli direttamente su SharePoint.</p>}
       </div>

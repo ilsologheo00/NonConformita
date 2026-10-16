@@ -9,12 +9,14 @@ interface Props {
   error?: string;
   siteId: string;
   getToken: () => Promise<string>;
+  /** Changes every time the form is shown again, so lookup values are re-read. */
+  refreshKey?: number;
   onChange: (v: FieldValue) => void;
 }
 
 const OTHER = "\u0000altro";
 
-export function FieldInput({ field: f, value, error, siteId, getToken, onChange }: Props) {
+export function FieldInput({ field: f, value, error, siteId, getToken, refreshKey, onChange }: Props) {
   const id = `f-${f.name}`;
   const hintId = f.description ? `${id}-hint` : undefined;
   const errId = error ? `${id}-err` : undefined;
@@ -42,7 +44,7 @@ export function FieldInput({ field: f, value, error, siteId, getToken, onChange 
         </p>
       )}
 
-      <Control f={f} value={value} common={common} describedBy={describedBy} invalid={!!error} siteId={siteId} getToken={getToken} onChange={onChange} />
+      <Control f={f} value={value} common={common} describedBy={describedBy} invalid={!!error} siteId={siteId} getToken={getToken} refreshKey={refreshKey} onChange={onChange} />
 
       {error && (
         <p className="field-error" id={errId}>
@@ -69,6 +71,7 @@ function Control({
   invalid,
   siteId,
   getToken,
+  refreshKey,
   onChange,
 }: {
   f: Field;
@@ -78,6 +81,7 @@ function Control({
   invalid: boolean;
   siteId: string;
   getToken: () => Promise<string>;
+  refreshKey?: number;
   onChange: (v: FieldValue) => void;
 }) {
   const str = typeof value === "string" ? value : "";
@@ -141,7 +145,7 @@ function Control({
       );
 
     case "lookup":
-      return <LookupControl f={f} value={value} common={common} siteId={siteId} getToken={getToken} onChange={onChange} />;
+      return <LookupControl f={f} value={value} common={common} siteId={siteId} getToken={getToken} refreshKey={refreshKey} onChange={onChange} />;
   }
 }
 
@@ -221,6 +225,7 @@ function LookupControl({
   common,
   siteId,
   getToken,
+  refreshKey,
   onChange,
 }: {
   f: Field;
@@ -228,21 +233,29 @@ function LookupControl({
   common: Record<string, unknown>;
   siteId: string;
   getToken: () => Promise<string>;
+  refreshKey?: number;
   onChange: (v: FieldValue) => void;
 }) {
   const [options, setOptions] = useState<LookupOption[] | null>(null);
   const [err, setErr] = useState("");
 
+  // "NC collegata" and the like point at non-conformities: newest first, with their ID.
+  const byId = /^nc\b/.test(f.label.trim().toLowerCase());
+
   useEffect(() => {
     let alive = true;
     getToken()
-      .then((t) => loadLookupOptions(t, siteId, f.lookupListId!, f.lookupColumn!))
-      .then((o) => alive && setOptions(o))
+      .then((t) => loadLookupOptions(t, siteId, f.lookupListId!, f.lookupColumn!, byId))
+      .then((o) => {
+        if (!alive) return;
+        setOptions(o);
+        setErr("");
+      })
       .catch((e) => alive && setErr((e as Error).message));
     return () => {
       alive = false;
     };
-  }, [f.lookupListId, f.lookupColumn, siteId, getToken]);
+  }, [f.lookupListId, f.lookupColumn, byId, siteId, getToken, refreshKey]);
 
   if (err) return <p className="field-error">Valori non caricati: {err}</p>;
 

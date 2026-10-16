@@ -206,14 +206,20 @@ export interface LookupOption {
   label: string;
 }
 
-export async function loadLookupOptions(token: string, siteId: string, listId: string, column: string): Promise<LookupOption[]> {
+/**
+ * Values of a lookup column. byId puts the newest item first and prefixes its
+ * ID, for lookups on records such as the non-conformities themselves.
+ */
+export async function loadLookupOptions(token: string, siteId: string, listId: string, column: string, byId = false): Promise<LookupOption[]> {
   const items = await graphAll<{ id: string; fields: Record<string, unknown> }>(
     token,
     `/sites/${siteId}/lists/${listId}/items?$expand=fields($select=${column})&$top=999`
   );
-  return items
-    .map((i) => ({ id: i.id, label: String(i.fields[column] ?? `#${i.id}`) }))
-    .sort((a, b) => a.label.localeCompare(b.label, "it"));
+  const options = items.map((i) => {
+    const value = i.fields[column] === undefined || i.fields[column] === null ? "" : String(i.fields[column]);
+    return { id: i.id, label: byId ? (value && value !== i.id ? `${i.id} – ${value}` : i.id) : value || `#${i.id}` };
+  });
+  return byId ? options.sort((a, b) => Number(b.id) - Number(a.id)) : options.sort((a, b) => a.label.localeCompare(b.label, "it"));
 }
 
 /* ---- Create -------------------------------------------------------------- */

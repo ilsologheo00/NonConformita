@@ -26,6 +26,7 @@ export const previewSchema: ListSchema = {
     { name: "ProssimoOperatore", label: "Prossimo operatore", kind: "choice", required: false, choices: ["mario.rossi@example.com", "laura.bianchi@example.com"] },
     { name: "Chiusa", label: "Chiusa", kind: "boolean", required: false, defaultValue: "1" },
     { name: "DataChiusura", label: "Data chiusura", kind: "datetime", required: false },
+    { name: "CreaAzione", label: "Crea azione correttiva", kind: "boolean", required: false },
   ],
 };
 
