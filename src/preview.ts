@@ -59,7 +59,7 @@ function sample(id: number, created: string, createdBy: string, values: Record<s
     text[f.name] = values[f.name] ?? "";
     sort[f.name] = f.kind === "date" && values[f.name] ? values[f.name].split("/").reverse().join("-") : (values[f.name] ?? "").toLowerCase();
   }
-  return { id: String(id), created, createdBy, text, sort };
+  return { id: String(id), created, createdBy, text, sort, lookupIds: {}, title: values.Title ?? "" };
 }
 
 export const previewItems: ListItem[] = [

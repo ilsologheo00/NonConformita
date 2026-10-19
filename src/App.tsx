@@ -3,19 +3,20 @@ import { useMsal, useIsAuthenticated } from "@azure/msal-react";
 import { InteractionStatus } from "@azure/msal-browser";
 import { config, missingConfig } from "./config";
 import { getToken, graphScopes, signInError } from "./auth/msal";
-import { createItem, isEmpty, ListNotFoundError, loadSchema, type FieldValue, type ListSchema } from "./graph/sharepoint";
+import { createItem, isEmpty, ListNotFoundError, loadSchema, sameList, type FieldValue, type ListSchema } from "./graph/sharepoint";
 import { GraphError } from "./graph/client";
 import { FieldInput } from "./components/FieldInput";
 import { useTheme } from "./theme/ThemeContext";
-import { NcList } from "./components/NcList";
+import { ListView, type ListDef } from "./components/ListView";
 import { ActionIcon, ActivityIcon, CheckIcon, FormIcon, ListIcon, MoonIcon, PeopleIcon, SignOutIcon, SunIcon } from "./components/icons";
 import { OperatorsDialog } from "./operators/OperatorsDialog";
 import { isOperatorField, useOperators } from "./operators/OperatorsContext";
 
 const isPreview = import.meta.env.DEV && new URLSearchParams(window.location.search).has("anteprima");
 
-type View = "form" | "list" | "actions" | "activities";
-type FormView = Exclude<View, "list">;
+type ListPage = "list" | "actionsList" | "activitiesList";
+type View = "form" | "actions" | "activities" | ListPage;
+type FormView = Exclude<View, ListPage>;
 
 /** The SharePoint lists the app can add items to, one form each. */
 interface FormDef {
@@ -32,6 +33,29 @@ const forms: Record<FormView, FormDef> = {
   form: { list: config.list, envKey: "VITE_SP_LIST", title: "Nuova non conformità", sent: "Non conformità inviata", noun: "la non conformità" },
   actions: { list: config.actionsList, envKey: "VITE_SP_ACTIONS_LIST", title: "Nuova azione correttiva / miglioramento", sent: "Azione inviata", noun: "l'azione" },
   activities: { list: config.activitiesList, envKey: "VITE_SP_ACTIVITIES_LIST", title: "Nuova attività proposta", sent: "Attività inviata", noun: "l'attività" },
+};
+
+const sample = (key: FormView) => () => import("./preview").then((m) => ({ schema: m.previewSchemas[key], items: key === "form" ? m.previewItems : [] }));
+
+/** The read-only list pages, in sidebar order. */
+const listPages: Record<ListPage, ListDef & { nav: string }> = {
+  list: {
+    list: config.list,
+    title: "Elenco non conformità",
+    nav: "Elenco non conformità",
+    items: "non conformità",
+    related: [{ list: config.actionsList, label: "Azioni correttive" }],
+    preview: sample("form"),
+  },
+  actionsList: {
+    list: config.actionsList,
+    title: "Elenco azioni correttive / miglioramenti",
+    nav: "Elenco azioni correttive",
+    items: "azioni",
+    related: [{ list: config.activitiesList, label: "Attività proposte" }],
+    preview: sample("actions"),
+  },
+  activitiesList: { list: config.activitiesList, title: "Elenco attività proposte", nav: "Elenco attività proposte", items: "attività", preview: sample("activities") },
 };
 
 export function App() {
@@ -68,7 +92,6 @@ function Views({ view, account, onView }: { view: View; account: Account | null;
   useEffect(() => {
     setOpened((o) => (o.has(view) ? o : new Set(o).add(view)));
   }, [view]);
-  const listOpened = opened.has("list");
 
   return (
     <>
@@ -87,10 +110,13 @@ function Views({ view, account, onView }: { view: View; account: Account | null;
             </div>
           )
       )}
-      {listOpened && (
-        <div hidden={view !== "list"}>
-          <NcList getToken={token} active={view === "list"} explain={explain} />
-        </div>
+      {(Object.keys(listPages) as ListPage[]).map(
+        (key) =>
+          opened.has(key) && (
+            <div key={key} hidden={view !== key}>
+              <ListView def={listPages[key]} getToken={token} active={view === key} explain={explain} />
+            </div>
+          )
       )}
     </>
   );
@@ -113,10 +139,12 @@ function Shell({ view, onView, children }: { view: View; onView: (v: View) => vo
           <span className="sidebar-brand-name">Qualità</span>
         </div>
         <nav className="sidebar-nav">
-          <button type="button" className={`sidebar-link${view === "list" ? " active" : ""}`} aria-current={view === "list" ? "page" : undefined} onClick={() => onView("list")}>
-            <ListIcon />
-            Elenco non conformità
-          </button>
+          {(Object.keys(listPages) as ListPage[]).map((key) => (
+            <button key={key} type="button" className={`sidebar-link${view === key ? " active" : ""}`} aria-current={view === key ? "page" : undefined} onClick={() => onView(key)}>
+              <ListIcon />
+              {listPages[key].nav}
+            </button>
+          ))}
           <hr className="sidebar-sep" />
           <button type="button" className={`sidebar-link${view === "form" ? " active" : ""}`} aria-current={view === "form" ? "page" : undefined} onClick={() => onView("form")}>
             <FormIcon />
@@ -190,7 +218,7 @@ function Authed({ view, onView }: { view: View; onView: (v: View) => void }) {
   if (inProgress !== InteractionStatus.None && !signedIn) return <div className="page"><p className="muted">Accesso in corso…</p></div>;
 
   if (!signedIn) {
-    const def = forms[view === "list" ? "form" : view];
+    const def = forms[({ list: "form", actionsList: "actions", activitiesList: "activities" } as const)[view as ListPage] ?? (view as FormView)];
     return (
       <div className="page">
         <h1>{def.title}</h1>
@@ -328,10 +356,8 @@ function switchedOn(schema: ListSchema, values: Record<string, FieldValue>, labe
   return !!flag && values[flag.name] === true;
 }
 
-const guid = (id = "") => id.replace(/[{}]/g, "").toLowerCase();
-
 /** The lookup column ("NC collegata"...) pointing at the list the item came from. */
-const linkField = (schema: ListSchema, link: Link) => schema.fields.find((f) => f.kind === "lookup" && guid(f.lookupListId) === guid(link.listId));
+const linkField = (schema: ListSchema, link: Link) => schema.fields.find((f) => f.kind === "lookup" && sameList(f.lookupListId, link.listId));
 
 /** An item to link a new one to; seq tells two requests for the same item apart. */
 type Link = { id: string; listId: string; noun: string; seq: number };

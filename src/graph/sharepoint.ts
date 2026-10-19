@@ -330,6 +330,19 @@ export interface ListItem {
   text: Record<string, string>;
   /** Value to sort by per column: numbers and ISO dates sort as themselves. */
   sort: Record<string, string | number>;
+  /** Item ids each lookup column points at, keyed by internal name. */
+  lookupIds: Record<string, string[]>;
+  title: string;
+}
+
+/** Graph writes list ids with or without braces, in either case. */
+export const sameList = (a = "", b = "") => a.replace(/[{}]/g, "").toLowerCase() === b.replace(/[{}]/g, "").toLowerCase();
+
+function lookupIds(f: Field, raw: Record<string, unknown>): string[] {
+  const v = raw[f.name];
+  if (Array.isArray(v)) return v.map((x) => (x as LookupValue).LookupId).filter((x) => x !== undefined && x !== null).map(String);
+  const id = raw[`${f.name}LookupId`];
+  return id === undefined || id === null || id === "" ? [] : [String(id)];
 }
 
 type LookupValue = { LookupId?: number | string; LookupValue?: string; Email?: string };
@@ -397,7 +410,12 @@ export async function loadItems(token: string, schema: ListSchema): Promise<List
   return items.map((i) => {
     const text: Record<string, string> = {};
     const sort: Record<string, string | number> = {};
-    for (const f of schema.fields) [text[f.name], sort[f.name]] = cell(f, i.fields, people);
-    return { id: i.id, created: i.createdDateTime, createdBy: i.createdBy?.user?.displayName ?? "", text, sort };
+    const ids: Record<string, string[]> = {};
+    for (const f of schema.fields) {
+      [text[f.name], sort[f.name]] = cell(f, i.fields, people);
+      if (f.kind === "lookup") ids[f.name] = lookupIds(f, i.fields);
+    }
+    const title = typeof i.fields.Title === "string" ? i.fields.Title : "";
+    return { id: i.id, created: i.createdDateTime, createdBy: i.createdBy?.user?.displayName ?? "", text, sort, lookupIds: ids, title };
   });
 }
