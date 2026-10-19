@@ -3,11 +3,26 @@ import { useMsal, useIsAuthenticated } from "@azure/msal-react";
 import { InteractionStatus } from "@azure/msal-browser";
 import { config, missingConfig } from "./config";
 import { getToken, graphScopes, signInError } from "./auth/msal";
-import { createItem, isEmpty, ListNotFoundError, loadSchema, sameList, type FieldValue, type ListSchema } from "./graph/sharepoint";
+import {
+  changedFields,
+  createItem,
+  isEmpty,
+  ItemChangedError,
+  ListNotFoundError,
+  loadItem,
+  loadLinkedItems,
+  loadSchema,
+  sameList,
+  updateItem,
+  type EditableItem,
+  type FieldValue,
+  type ListItem,
+  type ListSchema,
+} from "./graph/sharepoint";
 import { GraphError } from "./graph/client";
 import { FieldInput } from "./components/FieldInput";
 import { useTheme } from "./theme/ThemeContext";
-import { ListView, type ListDef } from "./components/ListView";
+import { ListView, type ListDef, type RelatedDef } from "./components/ListView";
 import { ActionIcon, ActivityIcon, CheckIcon, FormIcon, ListIcon, MoonIcon, PeopleIcon, SignOutIcon, SunIcon } from "./components/icons";
 import { OperatorsDialog } from "./operators/OperatorsDialog";
 import { isOperatorField, useOperators } from "./operators/OperatorsContext";
@@ -27,12 +42,14 @@ interface FormDef {
   sent: string;
   /** Who the sign-in notice says the item is registered for. */
   noun: string;
+  /** Heading of an existing item open for editing, followed by its ID. */
+  itemTitle: string;
 }
 
 const forms: Record<FormView, FormDef> = {
-  form: { list: config.list, envKey: "VITE_SP_LIST", title: "Nuova non conformità", sent: "Non conformità inviata", noun: "la non conformità" },
-  actions: { list: config.actionsList, envKey: "VITE_SP_ACTIONS_LIST", title: "Nuova azione correttiva / miglioramento", sent: "Azione inviata", noun: "l'azione" },
-  activities: { list: config.activitiesList, envKey: "VITE_SP_ACTIVITIES_LIST", title: "Nuova attività proposta", sent: "Attività inviata", noun: "l'attività" },
+  form: { list: config.list, envKey: "VITE_SP_LIST", title: "Nuova non conformità", sent: "Non conformità inviata", noun: "la non conformità", itemTitle: "Non conformità" },
+  actions: { list: config.actionsList, envKey: "VITE_SP_ACTIONS_LIST", title: "Nuova azione correttiva / miglioramento", sent: "Azione inviata", noun: "l'azione", itemTitle: "Azione" },
+  activities: { list: config.activitiesList, envKey: "VITE_SP_ACTIVITIES_LIST", title: "Nuova attività proposta", sent: "Attività inviata", noun: "l'attività", itemTitle: "Attività proposta" },
 };
 
 const sample = (key: FormView) => () => import("./preview").then((m) => ({ schema: m.previewSchemas[key], items: key === "form" ? m.previewItems : [] }));
@@ -58,15 +75,34 @@ const listPages: Record<ListPage, ListDef & { nav: string }> = {
   activitiesList: { list: config.activitiesList, title: "Elenco attività proposte", nav: "Elenco attività proposte", items: "attività", preview: sample("activities") },
 };
 
+/** The form each list page edits its items with. */
+const formOf: Record<ListPage, FormView> = { list: "form", actionsList: "actions", activitiesList: "activities" };
+const isListPage = (v: View): v is ListPage => v in formOf;
+const pageOfList = (list: string) => (Object.keys(listPages) as ListPage[]).find((k) => listPages[k].list === list);
+
+/** The item open on each list page; none shows the list itself. */
+type Details = Partial<Record<ListPage, string>>;
+type OpenItem = (page: ListPage, id: string | null) => void;
+
 export function App() {
   const [view, setView] = useState<View>("form");
+  const [details, setDetails] = useState<Details>({});
+  const openItem = useCallback<OpenItem>((page, id) => {
+    setDetails((d) => ({ ...d, [page]: id ?? undefined }));
+    setView(page);
+    window.scrollTo(0, 0);
+  }, []);
   const missing = missingConfig();
+  const nav = { view, onView: setView, details, openItem };
   return (
-    <Shell view={view} onView={setView}>
-      {isPreview ? <Views view={view} account={null} onView={setView} /> : missing.length ? <SetupNeeded missing={missing} /> : <Authed view={view} onView={setView} />}
+    // A list in the sidebar always shows the list, even with one of its items open.
+    <Shell view={view} onView={(v) => (isListPage(v) ? openItem(v, null) : setView(v))}>
+      {isPreview ? <Views {...nav} account={null} /> : missing.length ? <SetupNeeded missing={missing} /> : <Authed {...nav} />}
     </Shell>
   );
 }
+
+type Nav = { view: View; onView: (v: View) => void; details: Details; openItem: OpenItem };
 
 type Account = ReturnType<typeof useMsal>["accounts"][number];
 
@@ -74,7 +110,7 @@ type Account = ReturnType<typeof useMsal>["accounts"][number];
  * Views are mounted the first time they are opened and then stay mounted,
  * so a half-filled form survives a look at another page.
  */
-function Views({ view, account, onView }: { view: View; account: Account | null; onView: (v: View) => void }) {
+function Views({ view, account, onView, details, openItem }: Nav & { account: Account | null }) {
   const token = useCallback(() => (account ? getToken(account) : Promise.resolve("preview")), [account]);
   const [opened, setOpened] = useState<Set<View>>(() => new Set([view]));
   // The item just sent in one form, handed to the form that follows it (NC → action → activity).
@@ -114,7 +150,26 @@ function Views({ view, account, onView }: { view: View; account: Account | null;
         (key) =>
           opened.has(key) && (
             <div key={key} hidden={view !== key}>
-              <ListView def={listPages[key]} getToken={token} active={view === key} explain={explain} />
+              <div hidden={!!details[key]}>
+                <ListView
+                  def={listPages[key]}
+                  getToken={token}
+                  active={view === key && !details[key]}
+                  explain={explain}
+                  onOpen={(id) => openItem(key, id)}
+                  onOpenRelated={(list, id) => openRelated(openItem, list, id)}
+                />
+              </div>
+              {details[key] && (
+                <ListForm
+                  key={details[key]}
+                  account={account}
+                  def={forms[formOf[key]]}
+                  preview={formOf[key]}
+                  active={view === key}
+                  edit={{ id: details[key], related: listPages[key].related ?? [], onBack: () => openItem(key, null), onOpenRelated: (list, id) => openRelated(openItem, list, id) }}
+                />
+              )}
             </div>
           )
       )}
@@ -211,14 +266,15 @@ function SetupNeeded({ missing }: { missing: string[] }) {
   );
 }
 
-function Authed({ view, onView }: { view: View; onView: (v: View) => void }) {
+function Authed(nav: Nav) {
+  const { view } = nav;
   const { instance, accounts, inProgress } = useMsal();
   const signedIn = useIsAuthenticated();
 
   if (inProgress !== InteractionStatus.None && !signedIn) return <div className="page"><p className="muted">Accesso in corso…</p></div>;
 
   if (!signedIn) {
-    const def = forms[({ list: "form", actionsList: "actions", activitiesList: "activities" } as const)[view as ListPage] ?? (view as FormView)];
+    const def = forms[isListPage(view) ? formOf[view] : view];
     return (
       <div className="page">
         <h1>{def.title}</h1>
@@ -237,7 +293,7 @@ function Authed({ view, onView }: { view: View; onView: (v: View) => void }) {
     );
   }
 
-  return <Views view={view} account={accounts[0]} onView={onView} />;
+  return <Views {...nav} account={accounts[0]} />;
 }
 
 /* ---- The form -------------------------------------------------------------- */
@@ -362,6 +418,16 @@ const linkField = (schema: ListSchema, link: Link) => schema.fields.find((f) => 
 /** An item to link a new one to; seq tells two requests for the same item apart. */
 type Link = { id: string; listId: string; noun: string; seq: number };
 
+/** A linked item ("NC collegata" → its actions) opens in its own list page. */
+function openRelated(openItem: OpenItem, list: string, id: string) {
+  const page = pageOfList(list);
+  if (page) openItem(page, id);
+}
+
+/** An existing item open for editing, and the other lists whose items link to it. */
+type Edit = { id: string; related: RelatedDef[]; onBack: () => void; onOpenRelated: (list: string, id: string) => void };
+type Linked = { list: string; label: string; items: ListItem[] };
+
 function ListForm({
   account,
   def,
@@ -369,6 +435,7 @@ function ListForm({
   active,
   onCreated,
   link,
+  edit,
 }: {
   account: Account | null;
   def: FormDef;
@@ -376,6 +443,7 @@ function ListForm({
   active: boolean;
   onCreated?: (id: string, schema: ListSchema, values: Record<string, FieldValue>) => void;
   link?: Link | null;
+  edit?: Edit;
 }) {
   const token = useCallback(() => (account ? getToken(account) : Promise.resolve("preview")), [account]);
   const [status, setStatus] = useState<Status>({ kind: "loading" });
@@ -393,21 +461,61 @@ function ListForm({
     wasActive.current = active;
   }, [active]);
 
+  // Editing: the item as last read from SharePoint, and what is linked to it.
+  const editId = edit?.id;
+  const related = useRef(edit?.related ?? []);
+  const [item, setItem] = useState<EditableItem | null>(null);
+  const [saved, setSaved] = useState(false);
+  const [conflict, setConflict] = useState(false);
+  const [linked, setLinked] = useState<Linked[]>([]);
+  const [reload, setReload] = useState(0);
+
   useEffect(() => {
     let alive = true;
     const load = account ? token().then((t) => loadSchema(t, def.list)) : import("./preview").then((m) => m.previewSchemas[preview]);
     load
       .then(withRequiredFields)
-      .then((schema) => {
+      .then(async (schema) => {
+        if (!editId) return { schema, item: null };
+        if (!account) return { schema, item: { id: editId, eTag: "", webUrl: "#", values: initialValues(schema) } };
+        return { schema, item: await loadItem(await token(), schema, editId) };
+      })
+      .then(({ schema, item }) => {
         if (!alive) return;
         setStatus({ kind: "ready", schema });
-        setValues(initialValues(schema));
+        setValues(item ? item.values : initialValues(schema));
+        setItem(item);
+        setErrors({});
+        setConflict(false);
       })
       .catch((e) => alive && setStatus({ kind: "error", message: explain(e, def), lists: e instanceof ListNotFoundError ? e.available : undefined }));
     return () => {
       alive = false;
     };
-  }, [token, account, def, preview]);
+  }, [token, account, def, preview, editId, reload]);
+
+  // Re-read each time the item is shown, so an action just linked to this NC shows up.
+  const listId = status.kind === "ready" ? status.schema.listId : "";
+  useEffect(() => {
+    if (!editId || !account || status.kind !== "ready") return;
+    let alive = true;
+    const schema = status.schema;
+    token()
+      .then((t) =>
+        Promise.all(
+          related.current.map((r) =>
+            loadLinkedItems(t, schema, r.list)
+              .then((l) => ({ list: r.list, label: r.label, items: l?.byItem.get(editId) ?? [] }))
+              .catch(() => ({ list: r.list, label: r.label, items: [] }))
+          )
+        )
+      )
+      .then((l) => alive && setLinked(l));
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the schema only matters through its list id
+  }, [editId, account, token, listId, shown]);
 
   // A fresh item for the one just created in the previous form, with its link column already set.
   const [linkedTo, setLinkedTo] = useState("");
@@ -427,12 +535,18 @@ function ListForm({
 
   const schema = status.kind === "ready" ? status.schema : null;
   const missingRequired = useMemo(() => (schema ? schema.fields.filter((f) => f.required && f.kind !== "boolean" && !isHidden(schema, values, f.name) && isEmpty(values[f.name])) : []), [schema, values]);
+  const dirty = useMemo(() => (schema && item ? changedFields(schema, item, values).size > 0 : false), [schema, item, values]);
 
-  if (status.kind === "loading") return <div className="page"><p className="muted">Lettura dei campi dalla lista SharePoint…</p></div>;
+  if (status.kind === "loading") return <div className="page"><p className="muted">{editId ? `Lettura dell'elemento ${editId} da SharePoint…` : "Lettura dei campi dalla lista SharePoint…"}</p></div>;
   if (status.kind === "error")
     return (
       <div className="page">
-        <h1>Impossibile aprire il modulo</h1>
+        {edit && (
+          <button type="button" className="btn-secondary back-button" onClick={edit.onBack}>
+            ← Torna all'elenco
+          </button>
+        )}
+        <h1>{editId ? `Impossibile aprire l'elemento ${editId}` : "Impossibile aprire il modulo"}</h1>
         <div className="notice notice-error">
           <p>{status.message}</p>
           {status.lists && (
@@ -468,6 +582,7 @@ function ListForm({
       }
       return next;
     });
+    setSaved(false);
     if (errors[name]) setErrors(({ [name]: _, ...rest }) => rest);
     if (closing && name === closing.closed && v === true && errors[closing.date]) setErrors(({ [closing.date]: _, ...rest }) => rest);
   }
@@ -488,18 +603,32 @@ function ListForm({
     }
     setSending(true);
     try {
+      if (item) {
+        if (account) {
+          const t = await token();
+          await updateItem(t, s, item, values);
+          const fresh = await loadItem(t, s, item.id);
+          setItem(fresh);
+          setValues(fresh.values);
+        } else {
+          setItem({ ...item, values });
+        }
+        setSaved(true);
+        return;
+      }
       if (!account) {
         await new Promise((r) => setTimeout(r, 600));
         setCreated({ id: "0 (anteprima, nulla è stato inviato)", webUrl: "#" });
         onCreated?.("0", s, values);
         return;
       }
-      const item = await createItem(await token(), s, values);
-      setCreated(item);
+      const added = await createItem(await token(), s, values);
+      setCreated(added);
       setLinkedTo("");
-      onCreated?.(item.id, s, values);
+      onCreated?.(added.id, s, values);
     } catch (err) {
-      setSendError(explain(err, def, true));
+      setConflict(err instanceof ItemChangedError);
+      setSendError(err instanceof ItemChangedError ? `${err.message} Ricarica per vedere la versione attuale: le tue modifiche andranno perse.` : explain(err, def, true));
     } finally {
       setSending(false);
     }
@@ -543,6 +672,44 @@ function ListForm({
 
   return (
     <form className="page page-form" ref={formRef} onSubmit={submit} noValidate>
+      {edit && item ? (
+        <header className="form-head">
+          <button type="button" className="btn-secondary back-button" onClick={edit.onBack}>
+            ← Torna all'elenco
+          </button>
+          <h1>
+            {def.itemTitle} n. {item.id}
+          </h1>
+          <p className="muted">
+            Dalla lista{" "}
+            <a href={s.listUrl} target="_blank" rel="noreferrer">
+              {s.listName}
+            </a>
+            .{" "}
+            <a href={item.webUrl} target="_blank" rel="noreferrer">
+              Apri su SharePoint
+            </a>
+            . I campi con <span className="req-mark">*</span> sono obbligatori.
+          </p>
+          {linked.map((l) => (
+            <p key={l.list} className="linked">
+              <span className="linked-label">{l.label} collegate:</span>{" "}
+              {l.items.length === 0 ? (
+                <span className="muted">nessuna</span>
+              ) : (
+                l.items.map((x, n) => (
+                  <span key={x.id}>
+                    {n > 0 && ", "}
+                    <button type="button" className="link-button" onClick={() => edit.onOpenRelated(l.list, x.id)}>
+                      {x.title ? `${x.id} – ${x.title}` : x.id}
+                    </button>
+                  </span>
+                ))
+              )}
+            </p>
+          ))}
+        </header>
+      ) : (
       <header className="form-head">
         <h1>{def.title}</h1>
         <p className="muted">
@@ -554,6 +721,7 @@ function ListForm({
         </p>
         {linkedTo && <p className="notice">Collegata {linkedTo} appena inserita.</p>}
       </header>
+      )}
 
       <div className="sheet">
         {s.fields.filter((f) => !isHidden(s, values, f.name)).map((f) => (
@@ -565,18 +733,44 @@ function ListForm({
       <div className="submit-bar">
         <div className="submit-status" aria-live="polite">
           {sendError ? (
-            <span className="status-error">{sendError}</span>
+            <span className="status-error">
+              {sendError}
+              {conflict && (
+                <>
+                  {" "}
+                  <button
+                    type="button"
+                    className="link-button"
+                    onClick={() => {
+                      setSendError("");
+                      setSaved(false);
+                      setReload((n) => n + 1);
+                    }}
+                  >
+                    Ricarica
+                  </button>
+                </>
+              )}
+            </span>
           ) : missingRequired.length ? (
             <button type="button" className="status-missing" onClick={() => focusField(missingRequired[0].name)}>
               {missingRequired.length === 1 ? `Manca 1 campo obbligatorio: ${missingRequired[0].label}` : `Mancano ${missingRequired.length} campi obbligatori`}
             </button>
+          ) : item ? (
+            <span className={dirty ? "status-pending" : "status-ok"}>{dirty ? "Modifiche non salvate" : saved ? "Modifiche salvate" : "Nessuna modifica"}</span>
           ) : (
             <span className="status-ok">Pronta per l'invio</span>
           )}
         </div>
-        <button type="submit" className="btn-primary" disabled={sending}>
-          {sending ? "Invio in corso…" : "Invia"}
-        </button>
+        {item ? (
+          <button type="submit" className="btn-primary" disabled={sending || !dirty}>
+            {sending ? "Salvataggio…" : "Salva modifiche"}
+          </button>
+        ) : (
+          <button type="submit" className="btn-primary" disabled={sending}>
+            {sending ? "Invio in corso…" : "Invia"}
+          </button>
+        )}
       </div>
     </form>
   );

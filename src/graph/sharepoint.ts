@@ -261,20 +261,35 @@ export function isEmpty(v: FieldValue): boolean {
   return v === undefined || v === "" || (Array.isArray(v) && v.length === 0);
 }
 
-export async function createItem(
-  token: string,
-  schema: ListSchema,
-  values: Record<string, FieldValue>
-): Promise<{ id: string; webUrl: string }> {
+/**
+ * Form values as Graph's fields payload. Only the columns in only are written
+ * (all when absent); an emptied column is cleared, which matters when editing.
+ */
+async function toGraphFields(token: string, schema: ListSchema, values: Record<string, FieldValue>, only?: Set<string>): Promise<Record<string, unknown>> {
   const fields: Record<string, unknown> = {};
 
   for (const f of schema.fields) {
+    if (only && !only.has(f.name)) continue;
     const v = values[f.name];
     if (f.kind === "boolean") {
       fields[f.name] = !!v;
       continue;
     }
-    if (isEmpty(v)) continue;
+    if (isEmpty(v)) {
+      if (!only) continue;
+      if (f.kind === "multichoice") {
+        fields[`${f.name}@odata.type`] = "Collection(Edm.String)";
+        fields[f.name] = [];
+      } else if ((f.kind === "lookup" || f.kind === "person") && f.multiple) {
+        fields[`${f.name}LookupId@odata.type`] = f.kind === "lookup" ? "Collection(Edm.Int32)" : "Collection(Edm.String)";
+        fields[`${f.name}LookupId`] = [];
+      } else if (f.kind === "lookup" || f.kind === "person") {
+        fields[`${f.name}LookupId`] = null;
+      } else {
+        fields[f.name] = null;
+      }
+      continue;
+    }
 
     switch (f.kind) {
       case "number":
@@ -313,11 +328,120 @@ export async function createItem(
         fields[f.name] = v;
     }
   }
+  return fields;
+}
 
+export async function createItem(
+  token: string,
+  schema: ListSchema,
+  values: Record<string, FieldValue>
+): Promise<{ id: string; webUrl: string }> {
   return graph(token, `/sites/${schema.siteId}/lists/${schema.listId}/items`, {
     method: "POST",
-    body: { fields },
+    body: { fields: await toGraphFields(token, schema, values) },
   });
+}
+
+/* ---- Edit ---------------------------------------------------------------- */
+
+/** One item as form values, with the eTag that tells whether someone changed it since. */
+export interface EditableItem {
+  id: string;
+  eTag: string;
+  webUrl: string;
+  values: Record<string, FieldValue>;
+}
+
+/** The item was saved by someone else after it was opened (HTTP 412). */
+export class ItemChangedError extends Error {
+  constructor() {
+    super("Nel frattempo qualcun altro ha modificato questo elemento.");
+  }
+}
+
+const pad = (n: number) => String(n).padStart(2, "0");
+const localDate = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+
+/** Single-person columns only carry the user's id in the site's user list: read back name and e-mail. */
+async function personById(token: string, schema: ListSchema, id: string): Promise<Person> {
+  const u = await graph<{ fields: { Title?: string; EMail?: string } }>(
+    token,
+    `/sites/${schema.siteId}/lists/${await userList(token, schema)}/items/${id}?$expand=fields($select=Title,EMail)`
+  );
+  return { id: `sp:${id}`, displayName: u.fields.Title ?? `#${id}`, mail: u.fields.EMail ?? "" };
+}
+
+async function formValue(token: string, schema: ListSchema, f: Field, raw: Record<string, unknown>): Promise<FieldValue> {
+  const v = raw[f.name];
+  switch (f.kind) {
+    case "boolean":
+      return v === true;
+    case "multichoice":
+      return Array.isArray(v) ? v.map(String) : [];
+    case "number":
+      return typeof v === "number" ? String(v) : "";
+    case "date":
+      return typeof v === "string" ? localDate(new Date(v)) : "";
+    case "datetime": {
+      if (typeof v !== "string") return "";
+      const d = new Date(v);
+      return `${localDate(d)}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    }
+    case "lookup": {
+      const ids = lookupIds(f, raw);
+      return f.multiple ? ids : ids[0] ?? "";
+    }
+    case "person": {
+      if (Array.isArray(v)) return (v as LookupValue[]).map((p) => ({ id: `sp:${p.LookupId}`, displayName: p.LookupValue ?? "", mail: p.Email ?? "" }));
+      const id = raw[`${f.name}LookupId`];
+      return id === undefined || id === null || id === "" ? [] : [await personById(token, schema, String(id))];
+    }
+    case "url": {
+      const url = v && typeof v === "object" ? (v as { Url?: string }).Url : v;
+      return typeof url === "string" ? url : "";
+    }
+    case "note":
+      // Rich-text columns come back as HTML; the form edits plain text.
+      if (typeof v !== "string") return "";
+      return /^\s*</.test(v) ? new DOMParser().parseFromString(v, "text/html").body.textContent?.trim() ?? "" : v;
+    default:
+      return v === undefined || v === null ? "" : String(v);
+  }
+}
+
+export async function loadItem(token: string, schema: ListSchema, id: string): Promise<EditableItem> {
+  const item = await graph<{ id: string; eTag: string; webUrl: string; fields: Record<string, unknown> }>(
+    token,
+    `/sites/${schema.siteId}/lists/${schema.listId}/items/${id}?$expand=fields`
+  );
+  const values: Record<string, FieldValue> = {};
+  await Promise.all(schema.fields.map(async (f) => (values[f.name] = await formValue(token, schema, f, item.fields))));
+  return { id: item.id, eTag: item.eTag, webUrl: item.webUrl, values };
+}
+
+/** Columns whose value differs from the item as it was read. */
+export function changedFields(schema: ListSchema, item: EditableItem, values: Record<string, FieldValue>): Set<string> {
+  const same = (a: FieldValue, b: FieldValue) => JSON.stringify(a ?? "") === JSON.stringify(b ?? "");
+  return new Set(schema.fields.filter((f) => !same(values[f.name], item.values[f.name])).map((f) => f.name));
+}
+
+/**
+ * Writes only the columns that changed since the item was read, and only if
+ * nobody saved it in the meantime: SharePoint checks the eTag (If-Match).
+ */
+export async function updateItem(token: string, schema: ListSchema, item: EditableItem, values: Record<string, FieldValue>): Promise<void> {
+  const changed = changedFields(schema, item, values);
+  if (!changed.size) return;
+  try {
+    await graph(token, `/sites/${schema.siteId}/lists/${schema.listId}/items/${item.id}/fields`, {
+      method: "PATCH",
+      body: await toGraphFields(token, schema, values, changed),
+      headers: { "If-Match": item.eTag },
+    });
+  } catch (e) {
+    if (e instanceof GraphError && e.status === 412) throw new ItemChangedError();
+    throw e;
+  }
 }
 
 /* ---- Read ---------------------------------------------------------------- */
@@ -418,4 +542,17 @@ export async function loadItems(token: string, schema: ListSchema): Promise<List
     const title = typeof i.fields.Title === "string" ? i.fields.Title : "";
     return { id: i.id, created: i.createdDateTime, createdBy: i.createdBy?.user?.displayName ?? "", text, sort, lookupIds: ids, title };
   });
+}
+
+/** Items of another list whose lookup column points at this list, grouped by the item they point at. */
+export async function loadLinkedItems(token: string, schema: ListSchema, otherList: string): Promise<{ schema: ListSchema; byItem: Map<string, ListItem[]> } | null> {
+  const other = await loadSchema(token, otherList);
+  const field = other.fields.find((f) => f.kind === "lookup" && sameList(f.lookupListId, schema.listId));
+  if (!field) return null;
+  const byItem = new Map<string, ListItem[]>();
+  for (const x of await loadItems(token, other)) {
+    for (const id of x.lookupIds[field.name] ?? []) byItem.set(id, [...(byItem.get(id) ?? []), x]);
+  }
+  for (const xs of byItem.values()) xs.sort((a, b) => Number(a.id) - Number(b.id));
+  return { schema: other, byItem };
 }

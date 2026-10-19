@@ -1,18 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
-import { loadItems, loadSchema, sameList, type ListItem, type ListSchema } from "../graph/sharepoint";
+import { loadItems, loadLinkedItems, loadSchema, type ListItem, type ListSchema } from "../graph/sharepoint";
 import { ExternalIcon, RefreshIcon } from "./icons";
 
 type Status = { kind: "loading" } | { kind: "error"; message: string } | { kind: "ready"; schema: ListSchema; items: ListItem[]; related: Related[] };
-type Column = { key: string; label: string; text: (i: ListItem) => string; sort: (i: ListItem) => string | number; links?: (i: ListItem) => { id: string; url: string; label: string }[] };
+type Column = { key: string; label: string; text: (i: ListItem) => string; sort: (i: ListItem) => string | number; links?: (i: ListItem) => { id: string; label: string; open: () => void }[] };
 
 /** Items of another list whose lookup column points at this list's items ("NC collegata"). */
-type Related = { key: string; label: string; schema: ListSchema; byItem: Map<string, ListItem[]> };
-
-const itemUrl = (schema: ListSchema, id: string) => `${schema.listUrl.replace(/\/$/, "")}/DispForm.aspx?ID=${id}`;
+type Related = { key: string; list: string; label: string; byItem: Map<string, ListItem[]> };
 
 const dateTimeFmt = new Intl.DateTimeFormat("it-IT", { dateStyle: "short", timeStyle: "short" });
 
-function columns(schema: ListSchema, related: Related[]): Column[] {
+function columns(schema: ListSchema, related: Related[], openRelated: (list: string, id: string) => void): Column[] {
   return [
     { key: "ID", label: "ID", text: (i) => i.id, sort: (i) => Number(i.id) },
     ...schema.fields.map((f) => ({ key: f.name, label: f.label, text: (i: ListItem) => i.text[f.name], sort: (i: ListItem) => i.sort[f.name] })),
@@ -24,7 +22,7 @@ function columns(schema: ListSchema, related: Related[]): Column[] {
         label: r.label,
         text: (i: ListItem) => of(i).map(label).join(", "),
         sort: (i: ListItem) => of(i).length || "",
-        links: (i: ListItem) => of(i).map((x) => ({ id: x.id, url: itemUrl(r.schema, x.id), label: label(x) })),
+        links: (i: ListItem) => of(i).map((x) => ({ id: x.id, label: label(x), open: () => openRelated(r.list, x.id) })),
       };
     }),
     { key: "Created", label: "Creato", text: (i) => dateTimeFmt.format(new Date(i.created)), sort: (i) => i.created },
@@ -48,24 +46,37 @@ export interface ListDef {
   preview: () => Promise<{ schema: ListSchema; items: ListItem[] }>;
 }
 
-/** Every item of a related list, grouped by the item of this list its lookup points at. */
+/** A related list's items for each row; one that cannot be read only loses its column, not the whole page. */
 async function loadRelated(token: string, schema: ListSchema, def: RelatedDef): Promise<Related | null> {
-  const other = await loadSchema(token, def.list);
-  const field = other.fields.find((f) => f.kind === "lookup" && sameList(f.lookupListId, schema.listId));
-  if (!field) return null;
-  const byItem = new Map<string, ListItem[]>();
-  for (const x of await loadItems(token, other)) {
-    for (const id of x.lookupIds[field.name] ?? []) byItem.set(id, [...(byItem.get(id) ?? []), x]);
+  try {
+    const linked = await loadLinkedItems(token, schema, def.list);
+    return linked && { key: `related:${linked.schema.listId}`, list: def.list, label: def.label, byItem: linked.byItem };
+  } catch (e) {
+    console.warn(`Colonna “${def.label}” non caricata`, e);
+    return null;
   }
-  for (const xs of byItem.values()) xs.sort((a, b) => Number(a.id) - Number(b.id));
-  return { key: `related:${other.listId}`, label: def.label, schema: other, byItem };
 }
 
 /**
  * Read-only view of a SharePoint list. SharePoint refuses to be shown inside
- * another site's frame, so the items are read through Graph and drawn here.
+ * another site's frame, so the items are read through Graph and drawn here;
+ * a click on a row opens the item in the app (onOpen), a linked item opens in its own list (onOpenRelated).
  */
-export function ListView({ def, getToken, active, explain }: { def: ListDef; getToken: () => Promise<string>; active: boolean; explain: (e: unknown) => string }) {
+export function ListView({
+  def,
+  getToken,
+  active,
+  explain,
+  onOpen,
+  onOpenRelated,
+}: {
+  def: ListDef;
+  getToken: () => Promise<string>;
+  active: boolean;
+  explain: (e: unknown) => string;
+  onOpen: (id: string) => void;
+  onOpenRelated: (list: string, id: string) => void;
+}) {
   const [status, setStatus] = useState<Status>({ kind: "loading" });
   const [reload, setReload] = useState(0);
   const [query, setQuery] = useState("");
@@ -80,10 +91,7 @@ export function ListView({ def, getToken, active, explain }: { def: ListDef; get
       ? def.preview().then((p) => ({ ...p, related: [] as Related[] }))
       : getToken().then(async (token) => {
           const schema = await loadSchema(token, def.list);
-          const [items, related] = await Promise.all([loadItems(token, schema), Promise.all(
-            // A related list that cannot be read only loses its column, not the whole page.
-            (def.related ?? []).map((r) => loadRelated(token, schema, r).catch((e) => (console.warn(`Colonna “${r.label}” non caricata`, e), null)))
-          )]);
+          const [items, related] = await Promise.all([loadItems(token, schema), Promise.all((def.related ?? []).map((r) => loadRelated(token, schema, r)))]);
           return { schema, items, related: related.filter((r): r is Related => !!r) };
         });
     load
@@ -94,7 +102,7 @@ export function ListView({ def, getToken, active, explain }: { def: ListDef; get
     };
   }, [def, active, reload, getToken, explain]);
 
-  const cols = useMemo(() => (status.kind === "ready" ? columns(status.schema, status.related) : []), [status]);
+  const cols = useMemo(() => (status.kind === "ready" ? columns(status.schema, status.related, onOpenRelated) : []), [status, onOpenRelated]);
   const rows = useMemo(() => {
     if (status.kind !== "ready") return [];
     const q = query.trim().toLowerCase();
@@ -132,7 +140,7 @@ export function ListView({ def, getToken, active, explain }: { def: ListDef; get
         <div>
           <h1>{def.title}</h1>
           <p className="muted">
-            {status.items.length === 1 ? "1 elemento" : `${status.items.length} elementi`} nella lista “{s.listName}”. Fai clic sull'ID per aprire la scheda su SharePoint.
+            {status.items.length === 1 ? "1 elemento" : `${status.items.length} elementi`} nella lista “{s.listName}”. Fai clic su una riga per aprire la scheda e modificarla.
           </p>
         </div>
         <div className="list-actions">
@@ -167,23 +175,23 @@ export function ListView({ def, getToken, active, explain }: { def: ListDef; get
           </thead>
           <tbody>
             {rows.map((i) => (
-              <tr key={i.id}>
+              <tr key={i.id} className="list-row" onClick={(e) => !(e.target as HTMLElement).closest("a, button") && onOpen(i.id)}>
                 {cols.map((c) => {
                   const text = c.text(i);
                   return c.key === "ID" ? (
                     <td key={c.key}>
-                      <a href={itemUrl(s, i.id)} target="_blank" rel="noreferrer">
+                      <button type="button" className="link-button" onClick={() => onOpen(i.id)} aria-label={`Apri l'elemento ${i.id}`}>
                         {i.id}
-                      </a>
+                      </button>
                     </td>
                   ) : c.links ? (
                     <td key={c.key} title={text.length > 40 ? text : undefined}>
                       {c.links(i).map((l, n) => (
                         <span key={l.id}>
                           {n > 0 && ", "}
-                          <a href={l.url} target="_blank" rel="noreferrer">
+                          <button type="button" className="link-button" onClick={l.open}>
                             {l.label}
-                          </a>
+                          </button>
                         </span>
                       ))}
                     </td>
