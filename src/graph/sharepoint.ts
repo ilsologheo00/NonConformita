@@ -1,5 +1,5 @@
 import { config } from "../config";
-import { graph, graphAll } from "./client";
+import { graph, graphAll, GraphError } from "./client";
 
 /* Subset of Graph's columnDefinition that the form needs. */
 interface ColumnDefinition {
@@ -62,6 +62,8 @@ export interface ListSchema {
   fields: Field[];
   /** Columns the form cannot write (managed metadata, location...). */
   skipped: string[];
+  /** The site's hidden user list, where person columns point; its name depends on the site language. */
+  userListId?: string;
 }
 
 // System columns that are editable on paper but never appear on a form.
@@ -162,7 +164,11 @@ export async function loadSchema(token: string, listName: string = config.list):
     else skipped.push(c.displayName);
   }
 
-  return { siteId: site.id, listId: list.id, listName: list.displayName, listUrl: list.webUrl, fields, skipped };
+  // Found by its fixed address, _catalogs/users; the display name is translated.
+  const users =
+    lists.find((l) => /\/_catalogs\/users\/?$/i.test(l.webUrl.replace(/\/[^/]*\.aspx$/i, ""))) ??
+    lists.find((l) => /^(user information list|elenco informazioni utente)$/i.test(l.displayName.trim()));
+  return { siteId: site.id, listId: list.id, listName: list.displayName, listUrl: list.webUrl, fields, skipped, userListId: users?.id };
 }
 
 /* ---- People -------------------------------------------------------------- */
@@ -185,12 +191,37 @@ export async function searchPeople(token: string, q: string): Promise<Person[]> 
 
 /**
  * Person columns are written as the user's id in the site's hidden
- * "User Information List". A user who never opened the site is not there yet.
+ * user list (_catalogs/users). A user who never opened the site is not there yet.
  */
-async function personLookupId(token: string, siteId: string, mail: string): Promise<string> {
+// Graph does not always list it among the site's lists, but takes its title in
+// the path; the title is translated with the site language.
+const USER_LIST_TITLES = ["User Information List", "Elenco informazioni utente", "Elenco informazioni utenti", "Lista informazioni utente"];
+const userLists = new Map<string, Promise<string>>();
+
+function userList(token: string, schema: ListSchema): Promise<string> {
+  if (schema.userListId) return Promise.resolve(schema.userListId);
+  let found = userLists.get(schema.siteId);
+  if (!found) {
+    found = (async () => {
+      for (const title of USER_LIST_TITLES) {
+        try {
+          return (await graph<{ id: string }>(token, `/sites/${schema.siteId}/lists/${encodeURIComponent(title)}?$select=id`)).id;
+        } catch (e) {
+          if (!(e instanceof GraphError) || e.status !== 404) throw e;
+        }
+      }
+      throw new Error(`Elenco utenti del sito (_catalogs/users) non trovato con i nomi ${USER_LIST_TITLES.join(", ")}: impossibile salvare le colonne Persona.`);
+    })();
+    found.catch(() => userLists.delete(schema.siteId));
+    userLists.set(schema.siteId, found);
+  }
+  return found;
+}
+
+async function personLookupId(token: string, schema: ListSchema, mail: string): Promise<string> {
   const r = await graph<{ value: { id: string }[] }>(
     token,
-    `/sites/${siteId}/lists/User Information List/items?$select=id&$filter=fields/EMail eq '${mail.replace(/'/g, "''")}'`,
+    `/sites/${schema.siteId}/lists/${await userList(token, schema)}/items?$select=id&$filter=fields/EMail eq '${mail.replace(/'/g, "''")}'`,
     { headers: { Prefer: "HonorNonIndexedQueriesWarningMayFailRandomly" } }
   );
   if (!r.value.length) {
@@ -269,7 +300,7 @@ export async function createItem(
         }
         break;
       case "person": {
-        const ids = await Promise.all((v as Person[]).map((p) => personLookupId(token, schema.siteId, p.mail)));
+        const ids = await Promise.all((v as Person[]).map((p) => personLookupId(token, schema, p.mail)));
         if (f.multiple) {
           fields[`${f.name}LookupId@odata.type`] = "Collection(Edm.String)";
           fields[`${f.name}LookupId`] = ids;
@@ -357,10 +388,9 @@ export async function loadItems(token: string, schema: ListSchema): Promise<List
     ),
     // Single-person columns only carry the user's id in the site's user list.
     schema.fields.some((f) => f.kind === "person")
-      ? graphAll<{ id: string; fields: { Title?: string } }>(
-          token,
-          `/sites/${schema.siteId}/lists/User Information List/items?$expand=fields($select=Title)&$top=999`
-        ).then((users) => new Map(users.map((u) => [u.id, u.fields.Title ?? `#${u.id}`])))
+      ? userList(token, schema)
+          .then((id) => graphAll<{ id: string; fields: { Title?: string } }>(token, `/sites/${schema.siteId}/lists/${id}/items?$expand=fields($select=Title)&$top=999`))
+          .then((users) => new Map(users.map((u) => [u.id, u.fields.Title ?? `#${u.id}`])))
       : Promise.resolve(new Map<string, string>()),
   ]);
 
