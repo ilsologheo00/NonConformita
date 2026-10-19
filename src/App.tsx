@@ -53,13 +53,14 @@ type Account = ReturnType<typeof useMsal>["accounts"][number];
 function Views({ view, account, onView }: { view: View; account: Account | null; onView: (v: View) => void }) {
   const token = useCallback(() => (account ? getToken(account) : Promise.resolve("preview")), [account]);
   const [opened, setOpened] = useState<Set<View>>(() => new Set([view]));
-  // The NC just sent with "Crea azione correttiva" on, handed to the actions form.
-  const [linkNc, setLinkNc] = useState<LinkNc | null>(null);
-  const onNcCreated = useCallback(
-    (id: string, schema: ListSchema, values: Record<string, FieldValue>) => {
-      if (!wantsCorrectiveAction(schema, values)) return;
-      setLinkNc((l) => ({ id, seq: (l?.seq ?? 0) + 1 }));
-      onView("actions");
+  // The item just sent in one form, handed to the form that follows it (NC → action → activity).
+  const [links, setLinks] = useState<Partial<Record<FormView, Link>>>({});
+  const onCreated = useCallback(
+    (from: FormView, id: string, schema: ListSchema, values: Record<string, FieldValue>) => {
+      const next = followUps[from];
+      if (!next || !switchedOn(schema, values, next.flag)) return;
+      setLinks((l) => ({ ...l, [next.view]: { id, listId: schema.listId, noun: next.linkedNoun, seq: (l[next.view]?.seq ?? 0) + 1 } }));
+      onView(next.view);
       window.scrollTo(0, 0);
     },
     [onView]
@@ -80,8 +81,8 @@ function Views({ view, account, onView }: { view: View; account: Account | null;
                 def={forms[key]}
                 preview={key}
                 active={view === key}
-                onCreated={key === "form" ? onNcCreated : undefined}
-                linkNc={key === "actions" ? linkNc : null}
+                onCreated={(id, schema, values) => onCreated(key, id, schema, values)}
+                link={links[key] ?? null}
               />
             </div>
           )
@@ -311,17 +312,29 @@ function explain(e: unknown, def: Pick<FormDef, "list" | "envKey"> = forms.form,
   return (e as Error).message || String(e);
 }
 
-/** "Crea azione correttiva" switched on in the NC form. */
-function wantsCorrectiveAction(schema: ListSchema, values: Record<string, FieldValue>): boolean {
-  const flag = schema.fields.find((f) => f.kind === "boolean" && /azion[ei]\s+correttiv/.test(f.label.trim().toLowerCase()));
+/**
+ * The form that opens after an item is sent, linked to it. flag matches the
+ * label of the yes/no column that asks for it ("Crea azione correttiva");
+ * without one it always opens.
+ */
+const followUps: Partial<Record<FormView, { view: FormView; flag?: RegExp; linkedNoun: string }>> = {
+  form: { view: "actions", flag: /azion[ei]\s+correttiv/, linkedNoun: "alla non conformità" },
+  actions: { view: "activities", linkedNoun: "all'azione" },
+};
+
+function switchedOn(schema: ListSchema, values: Record<string, FieldValue>, label?: RegExp): boolean {
+  if (!label) return true;
+  const flag = schema.fields.find((f) => f.kind === "boolean" && label.test(f.label.trim().toLowerCase()));
   return !!flag && values[flag.name] === true;
 }
 
-/** "NC collegata": the lookup from an action to its non-conformity. */
-const ncLinkField = (schema: ListSchema) => schema.fields.find((f) => f.kind === "lookup" && /^nc\b/.test(f.label.trim().toLowerCase()));
+const guid = (id = "") => id.replace(/[{}]/g, "").toLowerCase();
 
-/** A non-conformity to link a new action to; seq tells two requests for the same NC apart. */
-type LinkNc = { id: string; seq: number };
+/** The lookup column ("NC collegata"...) pointing at the list the item came from. */
+const linkField = (schema: ListSchema, link: Link) => schema.fields.find((f) => f.kind === "lookup" && guid(f.lookupListId) === guid(link.listId));
+
+/** An item to link a new one to; seq tells two requests for the same item apart. */
+type Link = { id: string; listId: string; noun: string; seq: number };
 
 function ListForm({
   account,
@@ -329,14 +342,14 @@ function ListForm({
   preview,
   active,
   onCreated,
-  linkNc,
+  link,
 }: {
   account: Account | null;
   def: FormDef;
   preview: FormView;
   active: boolean;
   onCreated?: (id: string, schema: ListSchema, values: Record<string, FieldValue>) => void;
-  linkNc?: LinkNc | null;
+  link?: Link | null;
 }) {
   const token = useCallback(() => (account ? getToken(account) : Promise.resolve("preview")), [account]);
   const [status, setStatus] = useState<Status>({ kind: "loading" });
@@ -370,21 +383,21 @@ function ListForm({
     };
   }, [token, account, def, preview]);
 
-  // A fresh action for the NC just created, with "NC collegata" already set.
+  // A fresh item for the one just created in the previous form, with its link column already set.
   const [linkedTo, setLinkedTo] = useState("");
   const appliedLink = useRef(0);
   useEffect(() => {
-    if (status.kind !== "ready" || !linkNc || appliedLink.current === linkNc.seq) return;
-    appliedLink.current = linkNc.seq;
-    const field = ncLinkField(status.schema);
+    if (status.kind !== "ready" || !link || appliedLink.current === link.seq) return;
+    appliedLink.current = link.seq;
+    const field = linkField(status.schema, link);
     const fresh = initialValues(status.schema);
-    if (field) fresh[field.name] = field.multiple ? [linkNc.id] : linkNc.id;
+    if (field) fresh[field.name] = field.multiple ? [link.id] : link.id;
     setValues(fresh);
     setErrors({});
     setSendError("");
     setCreated(null);
-    setLinkedTo(field ? linkNc.id : "");
-  }, [status, linkNc]);
+    setLinkedTo(field ? `${link.noun} n. ${link.id}` : "");
+  }, [status, link]);
 
   const schema = status.kind === "ready" ? status.schema : null;
   const missingRequired = useMemo(() => (schema ? schema.fields.filter((f) => f.required && f.kind !== "boolean" && !isHidden(schema, values, f.name) && isEmpty(values[f.name])) : []), [schema, values]);
@@ -513,7 +526,7 @@ function ListForm({
           </a>
           . I campi con <span className="req-mark">*</span> sono obbligatori.
         </p>
-        {linkedTo && <p className="notice">Collegata alla non conformità n. {linkedTo} appena inserita.</p>}
+        {linkedTo && <p className="notice">Collegata {linkedTo} appena inserita.</p>}
       </header>
 
       <div className="sheet">

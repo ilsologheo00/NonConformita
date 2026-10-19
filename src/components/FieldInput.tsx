@@ -239,8 +239,8 @@ function LookupControl({
   const [options, setOptions] = useState<LookupOption[] | null>(null);
   const [err, setErr] = useState("");
 
-  // "NC collegata" and the like point at non-conformities: newest first, with their ID.
-  const byId = /^nc\b/.test(f.label.trim().toLowerCase());
+  // "NC collegata", "Azione collegata" and the like point at records: newest first, with their ID.
+  const byId = /^(nc|azion[ei])\b/.test(f.label.trim().toLowerCase());
 
   useEffect(() => {
     let alive = true;
