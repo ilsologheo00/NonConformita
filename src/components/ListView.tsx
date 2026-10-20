@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { loadItems, loadLinkedItems, loadSchema, type ListItem, type ListSchema } from "../graph/sharepoint";
-import { ExternalIcon, RefreshIcon } from "./icons";
+import { deleteItem, loadItems, loadLinkedItems, loadSchema, type ListItem, type ListSchema } from "../graph/sharepoint";
+import { ExternalIcon, RefreshIcon, TrashIcon } from "./icons";
 
 type Status = { kind: "loading" } | { kind: "error"; message: string } | { kind: "ready"; schema: ListSchema; items: ListItem[]; related: Related[] };
 type Column = { key: string; label: string; text: (i: ListItem) => string; sort: (i: ListItem) => string | number; links?: (i: ListItem) => { id: string; label: string; open: () => void }[] };
@@ -81,6 +81,8 @@ export function ListView({
   const [reload, setReload] = useState(0);
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<{ key: string; desc: boolean }>({ key: "ID", desc: true });
+  const [deleting, setDeleting] = useState("");
+  const [deleteError, setDeleteError] = useState("");
 
   // Reloaded every time the view is opened, so a just-sent item shows up.
   useEffect(() => {
@@ -133,6 +135,24 @@ export function ListView({
     );
 
   const s = status.schema;
+  const ready = status;
+
+  async function remove(i: ListItem) {
+    // What still points at this item: SharePoint keeps those items, with the link emptied.
+    const linked = ready.related.map((r) => ({ label: r.label.toLowerCase(), n: r.byItem.get(i.id)?.length ?? 0 })).filter((r) => r.n > 0);
+    const warning = linked.length ? `\n\nAttenzione: ha ${linked.map((r) => `${r.n} ${r.label}`).join(" e ")} collegate, che resteranno senza questo collegamento.` : "";
+    if (!window.confirm(`Eliminare l'elemento ${i.id}${i.title ? ` “${i.title}”` : ""} dalla lista “${s.listName}”?${warning}`)) return;
+    setDeleting(i.id);
+    setDeleteError("");
+    try {
+      if (s.siteId !== "preview") await deleteItem(await getToken(), s, i.id);
+      setStatus((st) => (st.kind === "ready" ? { ...st, items: st.items.filter((x) => x.id !== i.id) } : st));
+    } catch (e) {
+      setDeleteError(`Elemento ${i.id} non eliminato: ${explain(e)}`);
+    } finally {
+      setDeleting("");
+    }
+  }
 
   return (
     <div className="page page-list">
@@ -155,6 +175,12 @@ export function ListView({
         </div>
       </header>
 
+      {deleteError && (
+        <div className="notice notice-error">
+          <p>{deleteError}</p>
+        </div>
+      )}
+
       <input type="search" className="list-search" placeholder="Cerca in tutte le colonne…" aria-label="Cerca" value={query} onChange={(e) => setQuery(e.target.value)} />
 
       <div className="list-table-wrap">
@@ -171,6 +197,9 @@ export function ListView({
                   </button>
                 </th>
               ))}
+              <th className="row-actions">
+                <span className="visually-hidden">Elimina</span>
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -201,6 +230,11 @@ export function ListView({
                     </td>
                   );
                 })}
+                <td className="row-actions">
+                  <button type="button" className="icon-danger" disabled={!!deleting} onClick={() => remove(i)} aria-label={`Elimina l'elemento ${i.id}`} title="Elimina">
+                    <TrashIcon />
+                  </button>
+                </td>
               </tr>
             ))}
           </tbody>

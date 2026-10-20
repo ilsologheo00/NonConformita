@@ -556,3 +556,7 @@ export async function loadLinkedItems(token: string, schema: ListSchema, otherLi
   for (const xs of byItem.values()) xs.sort((a, b) => Number(a.id) - Number(b.id));
   return { schema: other, byItem };
 }
+
+export async function deleteItem(token: string, schema: ListSchema, id: string): Promise<void> {
+  await graph(token, `/sites/${schema.siteId}/lists/${schema.listId}/items/${id}`, { method: "DELETE" });
+}

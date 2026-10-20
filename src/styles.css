@@ -909,6 +909,34 @@ input.list-search {
   cursor: pointer;
 }
 
+/* The delete button stays in view at the right edge, however wide the table. */
+.list-table .row-actions {
+  position: sticky;
+  right: 0;
+  width: 1%;
+  padding: 4px 8px;
+  background: var(--surface);
+  text-align: center;
+}
+
+.list-table th.row-actions {
+  z-index: 2;
+  background: var(--surface-2);
+}
+
+.list-table tbody tr:hover td.row-actions {
+  background: linear-gradient(var(--accent-soft), var(--accent-soft)), var(--surface);
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
 /* A button that reads as a link: item IDs, linked items, "Ricarica". */
 .link-button {
   padding: 0;
