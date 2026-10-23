@@ -23,14 +23,14 @@ import { GraphError } from "./graph/client";
 import { FieldInput } from "./components/FieldInput";
 import { useTheme } from "./theme/ThemeContext";
 import { ListView, type ListDef, type RelatedDef } from "./components/ListView";
-import { ActionIcon, ActivityIcon, CheckIcon, FormIcon, ListIcon, MoonIcon, PeopleIcon, SignOutIcon, SunIcon } from "./components/icons";
+import { ActionIcon, ActivityIcon, CheckIcon, ComplaintIcon, FormIcon, ListIcon, MoonIcon, PeopleIcon, SignOutIcon, SunIcon } from "./components/icons";
 import { OperatorsDialog } from "./operators/OperatorsDialog";
 import { isOperatorField, useOperators } from "./operators/OperatorsContext";
 
 const isPreview = import.meta.env.DEV && new URLSearchParams(window.location.search).has("anteprima");
 
-type ListPage = "list" | "actionsList" | "activitiesList";
-type View = "form" | "actions" | "activities" | ListPage;
+type ListPage = "list" | "actionsList" | "activitiesList" | "complaintsList";
+type View = "form" | "actions" | "activities" | "complaints" | ListPage;
 type FormView = Exclude<View, ListPage>;
 
 /** The SharePoint lists the app can add items to, one form each. */
@@ -44,12 +44,18 @@ interface FormDef {
   noun: string;
   /** Heading of an existing item open for editing, followed by its ID. */
   itemTitle: string;
+  /** The item is masculine ("il reclamo"): "creato", "registrato"... instead of "creata". */
+  masculine?: boolean;
 }
+
+/** The ending that agrees with the form's item: "a" for "la non conformità", "o" for "il reclamo". */
+const ending = (def: FormDef) => (def.masculine ? "o" : "a");
 
 const forms: Record<FormView, FormDef> = {
   form: { list: config.list, envKey: "VITE_SP_LIST", title: "Nuova non conformità", sent: "Non conformità inviata", noun: "la non conformità", itemTitle: "Non conformità" },
   actions: { list: config.actionsList, envKey: "VITE_SP_ACTIONS_LIST", title: "Nuova azione correttiva / miglioramento", sent: "Azione inviata", noun: "l'azione", itemTitle: "Azione" },
   activities: { list: config.activitiesList, envKey: "VITE_SP_ACTIVITIES_LIST", title: "Nuova attività proposta", sent: "Attività inviata", noun: "l'attività", itemTitle: "Attività proposta" },
+  complaints: { list: config.complaintsList, envKey: "VITE_SP_COMPLAINTS_LIST", title: "Nuovo reclamo commerciale", sent: "Reclamo inviato", noun: "il reclamo", itemTitle: "Reclamo commerciale", masculine: true },
 };
 
 const sample = (key: FormView) => () => import("./preview").then((m) => ({ schema: m.previewSchemas[key], items: key === "form" ? m.previewItems : [] }));
@@ -73,10 +79,11 @@ const listPages: Record<ListPage, ListDef & { nav: string }> = {
     preview: sample("actions"),
   },
   activitiesList: { list: config.activitiesList, title: "Elenco attività proposte", nav: "Elenco attività proposte", items: "attività", preview: sample("activities") },
+  complaintsList: { list: config.complaintsList, title: "Elenco reclami commerciali", nav: "Elenco reclami commerciali", items: "reclami", preview: sample("complaints") },
 };
 
 /** The form each list page edits its items with. */
-const formOf: Record<ListPage, FormView> = { list: "form", actionsList: "actions", activitiesList: "activities" };
+const formOf: Record<ListPage, FormView> = { list: "form", actionsList: "actions", activitiesList: "activities", complaintsList: "complaints" };
 const isListPage = (v: View): v is ListPage => v in formOf;
 const pageOfList = (list: string) => (Object.keys(listPages) as ListPage[]).find((k) => listPages[k].list === list);
 
@@ -213,6 +220,10 @@ function Shell({ view, onView, children }: { view: View; onView: (v: View) => vo
             <ActivityIcon />
             Nuova attività proposta
           </button>
+          <button type="button" className={`sidebar-link${view === "complaints" ? " active" : ""}`} aria-current={view === "complaints" ? "page" : undefined} onClick={() => onView("complaints")}>
+            <ComplaintIcon />
+            Nuovo reclamo commerciale
+          </button>
         </nav>
         <div className="sidebar-footer">
           {account && (
@@ -279,7 +290,7 @@ function Authed(nav: Nav) {
       <div className="page">
         <h1>{def.title}</h1>
         <div className="notice">
-          <p>Accedi con il tuo account Semantica: {def.noun} verrà registrata a tuo nome nella lista SharePoint.</p>
+          <p>Accedi con il tuo account Semantica: {def.noun} verrà registrat{ending(def)} a tuo nome nella lista SharePoint.</p>
           {signInError && (
             <p className="status-error">
               L'accesso precedente non è riuscito. Microsoft ha risposto: {signInError}
@@ -418,12 +429,16 @@ function explain(e: unknown, def: Pick<FormDef, "list" | "envKey"> = forms.form,
 const followUps: Partial<Record<FormView, { view: FormView; flag?: RegExp; linkedNoun: string }>> = {
   form: { view: "actions", flag: /azion[ei]\s+correttiv/, linkedNoun: "alla non conformità" },
   actions: { view: "activities", linkedNoun: "all'azione" },
+  activities: { view: "actions", flag: /nuova\s+azion[ei]\s+correttiv/, linkedNoun: "all'attività" },
 };
 
+/** The flag is a yes/no column, or a choice column answered "Sì". */
 function switchedOn(schema: ListSchema, values: Record<string, FieldValue>, label?: RegExp): boolean {
   if (!label) return true;
-  const flag = schema.fields.find((f) => f.kind === "boolean" && label.test(f.label.trim().toLowerCase()));
-  return !!flag && values[flag.name] === true;
+  const flag = schema.fields.find((f) => (f.kind === "boolean" || f.kind === "choice") && label.test(f.label.trim().toLowerCase()));
+  if (!flag) return false;
+  const v = values[flag.name];
+  return v === true || (typeof v === "string" && /^s[iì]$/i.test(v.trim()));
 }
 
 /** The lookup column ("NC collegata"...) pointing at the list the item came from. */
@@ -661,7 +676,7 @@ function ListForm({
           <div>
             <h1>{def.sent}</h1>
             <p className="muted">
-              Registrata in “{s.listName}” con ID {created.id}.
+              Registrat{ending(def)} in “{s.listName}” con ID {created.id}.
             </p>
             <div className="sent-actions">
               <button
@@ -674,7 +689,7 @@ function ListForm({
                   window.scrollTo(0, 0);
                 }}
               >
-                Inserisci un'altra
+                {def.masculine ? "Inseriscine un altro" : "Inserisci un'altra"}
               </button>
               <a className="btn-secondary" href={s.listUrl} target="_blank" rel="noreferrer">
                 <ListIcon />
@@ -730,7 +745,7 @@ function ListForm({
       <header className="form-head">
         <h1>{def.title}</h1>
         <p className="muted">
-          Verrà creata nella lista{" "}
+          Verrà creat{ending(def)} nella lista{" "}
           <a href={s.listUrl} target="_blank" rel="noreferrer">
             {s.listName}
           </a>
@@ -776,7 +791,7 @@ function ListForm({
           ) : item ? (
             <span className={dirty ? "status-pending" : "status-ok"}>{dirty ? "Modifiche non salvate" : saved ? "Modifiche salvate" : "Nessuna modifica"}</span>
           ) : (
-            <span className="status-ok">Pronta per l'invio</span>
+            <span className="status-ok">Pront{ending(def)} per l'invio</span>
           )}
         </div>
         {item ? (

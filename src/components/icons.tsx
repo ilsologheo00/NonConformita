@@ -92,3 +92,10 @@ export const ActivityIcon = () => (
     <path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2V16h5v-.1c0-.8.4-1.5 1-2A6 6 0 0 0 12 3z" />
   </svg>
 );
+
+export const ComplaintIcon = () => (
+  <svg {...base}>
+    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+    <path d="M12 7v4M12 14h.01" />
+  </svg>
+);

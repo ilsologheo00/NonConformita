@@ -33,7 +33,7 @@ export const previewSchema: ListSchema = {
 const sampleList = (listName: string, fields: ListSchema["fields"]): ListSchema => ({ siteId: "preview", listId: "preview", listName, listUrl: "#", skipped: [], fields });
 
 /** Sample fields per form, keyed like the app's views. */
-export const previewSchemas: Record<"form" | "actions" | "activities", ListSchema> = {
+export const previewSchemas: Record<"form" | "actions" | "activities" | "complaints", ListSchema> = {
   form: previewSchema,
   actions: sampleList("Anteprima azioni (campi di esempio)", [
     { name: "Title", label: "Titolo", kind: "text", required: true, maxLength: 255 },
@@ -52,6 +52,15 @@ export const previewSchemas: Record<"form" | "actions" | "activities", ListSchem
     { name: "Chiusa", label: "Chiusa", kind: "boolean", required: false },
     { name: "DataChiusura", label: "Data chiusura", kind: "date", required: false },
     { name: "Verificatore", label: "Verificatore", kind: "text", required: false },
+    { name: "NuovaAzione", label: "È necessaria nuova azione correttiva", kind: "boolean", required: false },
+  ]),
+  complaints: sampleList("Anteprima reclami (campi di esempio)", [
+    { name: "Title", label: "Titolo", kind: "text", required: true, maxLength: 255 },
+    { name: "Cliente", label: "Cliente", kind: "text", required: true },
+    { name: "DataReclamo", label: "Data reclamo", kind: "date", required: true, defaultValue: "[today]" },
+    { name: "Descrizione", label: "Descrizione", kind: "note", required: true },
+    { name: "Chiuso", label: "Chiuso", kind: "boolean", required: false },
+    { name: "DataChiusura", label: "Data chiusura", kind: "date", required: false },
   ]),
 };
 

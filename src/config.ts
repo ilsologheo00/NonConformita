@@ -17,6 +17,7 @@ export const config = {
   operatorsList: read("VITE_SP_OPERATORS_LIST") || "Operatori NC",
   actionsList: read("VITE_SP_ACTIONS_LIST") || "Azioni Correttive/Miglioramenti",
   activitiesList: read("VITE_SP_ACTIVITIES_LIST") || "Attività proposte",
+  complaintsList: read("VITE_SP_COMPLAINTS_LIST") || "Reclami commerciali",
   fields: read("VITE_SP_FIELDS")
     .split(",")
     .map((f) => f.trim())

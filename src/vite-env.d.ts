@@ -9,6 +9,7 @@ interface ImportMetaEnv {
   readonly VITE_SP_OPERATORS_LIST?: string;
   readonly VITE_SP_ACTIONS_LIST?: string;
   readonly VITE_SP_ACTIVITIES_LIST?: string;
+  readonly VITE_SP_COMPLAINTS_LIST?: string;
 }
 
 interface Window {
