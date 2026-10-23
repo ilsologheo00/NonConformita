@@ -49,6 +49,9 @@ export const previewSchemas: Record<"form" | "actions" | "activities", ListSchem
     { name: "Descrizione", label: "Descrizione", kind: "note", required: true },
     { name: "Priorita", label: "Priorità", kind: "choice", required: false, choices: ["Bassa", "Media", "Alta"] },
     { name: "DataProposta", label: "Data proposta", kind: "date", required: false, defaultValue: "[today]" },
+    { name: "Chiusa", label: "Chiusa", kind: "boolean", required: false },
+    { name: "DataChiusura", label: "Data chiusura", kind: "date", required: false },
+    { name: "Verificatore", label: "Verificatore", kind: "text", required: false },
   ]),
 };
 

@@ -328,14 +328,28 @@ function today(kind: "date" | "datetime") {
 }
 
 /**
- * The "Chiusa" switch and the closing-date column it fills in, recognised by
- * their display names since the columns are read from the list at runtime.
+ * The "Chiusa" switch, the closing-date column it fills in and, where the list
+ * has one, the "Verificatore" who checks the closing; recognised by their
+ * display names since the columns are read from the list at runtime.
  */
 function closingFields(schema: ListSchema) {
   const norm = (s: string) => s.trim().toLowerCase();
   const closed = schema.fields.find((f) => f.kind === "boolean" && /^chius[ao]\??$/.test(norm(f.label)));
   const date = schema.fields.find((f) => (f.kind === "date" || f.kind === "datetime") && /chiusura/.test(norm(f.label)));
-  return closed && date ? { closed: closed.name, date: date.name, dateKind: date.kind as "date" | "datetime" } : null;
+  const verifier = schema.fields.find((f) => /^verificator[ei]$/.test(norm(f.label)));
+  return closed && date ? { closed: closed.name, date: date.name, dateKind: date.kind as "date" | "datetime", verifier: verifier?.name } : null;
+}
+
+/** The verifier is asked right after "Chiusa", before the closing date. */
+function withClosingOrder(schema: ListSchema): ListSchema {
+  const closing = closingFields(schema);
+  if (!closing?.verifier) return schema;
+  const group = [closing.closed, closing.verifier, closing.date];
+  const at = schema.fields.findIndex((f) => f.name === closing.closed);
+  const rest = schema.fields.filter((f) => !group.includes(f.name));
+  const moved = group.map((name) => schema.fields.find((f) => f.name === name)!);
+  const before = schema.fields.slice(0, at).filter((f) => !group.includes(f.name)).length;
+  return { ...schema, fields: [...rest.slice(0, before), ...moved, ...rest.slice(before)] };
 }
 
 /**
@@ -371,12 +385,12 @@ function hiddenDefect(defect: NonNullable<ReturnType<typeof defectFields>>, valu
 }
 
 /**
- * The closing date is shown (and required, if the column is) only once the NC is marked closed;
+ * The closing date and the verifier are shown (and required, if the column is) only once the item is marked closed;
  * only the defect column matching "Tipo NC" is shown.
  */
 function isHidden(schema: ListSchema, values: Record<string, FieldValue>, name: string): boolean {
   const closing = closingFields(schema);
-  if (closing && name === closing.date && values[closing.closed] !== true) return true;
+  if (closing && (name === closing.date || name === closing.verifier) && values[closing.closed] !== true) return true;
   const defect = defectFields(schema);
   return !!defect && name === hiddenDefect(defect, values);
 }
@@ -475,6 +489,7 @@ function ListForm({
     const load = account ? token().then((t) => loadSchema(t, def.list)) : import("./preview").then((m) => m.previewSchemas[preview]);
     load
       .then(withRequiredFields)
+      .then(withClosingOrder)
       .then(async (schema) => {
         if (!editId) return { schema, item: null };
         if (!account) return { schema, item: { id: editId, eTag: "", webUrl: "#", values: initialValues(schema) } };
@@ -575,6 +590,8 @@ function ListForm({
       const next = { ...prev, [name]: v };
       // Switching "Chiusa" on stamps the closing date with this moment; off clears it.
       if (closing && name === closing.closed) next[closing.date] = v === true ? today(closing.dateKind) : "";
+      // Reopening clears the verifier too, so a hidden name is not sent.
+      if (closing?.verifier && name === closing.closed && v !== true) next[closing.verifier] = initialValues(s)[closing.verifier];
       // Changing "Tipo NC" clears the defect column that no longer applies, so it is not sent.
       if (defect && name === defect.type) {
         const off = hiddenDefect(defect, next);

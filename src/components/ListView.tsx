@@ -214,15 +214,16 @@ export function ListView({
                       </button>
                     </td>
                   ) : c.links ? (
-                    <td key={c.key} title={text.length > 40 ? text : undefined}>
-                      {c.links(i).map((l, n) => (
-                        <span key={l.id}>
-                          {n > 0 && ", "}
-                          <button type="button" className="link-button" onClick={l.open}>
-                            {l.label}
-                          </button>
-                        </span>
-                      ))}
+                    <td key={c.key}>
+                      <ul className="cell-links">
+                        {c.links(i).map((l) => (
+                          <li key={l.id} title={l.label.length > 40 ? l.label : undefined}>
+                            <button type="button" className="link-button" onClick={l.open}>
+                              {l.label}
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
                     </td>
                   ) : (
                     <td key={c.key} title={text.length > 40 ? text : undefined}>

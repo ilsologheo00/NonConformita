@@ -909,6 +909,22 @@ input.list-search {
   cursor: pointer;
 }
 
+/* Linked items ("Attività proposte"), one per line. */
+.cell-links {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cell-links li {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cell-links li + li {
+  margin-top: 4px;
+}
+
 /* The delete button stays in view at the right edge, however wide the table. */
 .list-table .row-actions {
   position: sticky;
