@@ -59,7 +59,7 @@ export const previewSchemas: Record<"form" | "actions" | "activities" | "complai
     { name: "Cliente", label: "Cliente", kind: "text", required: true },
     { name: "DataReclamo", label: "Data reclamo", kind: "date", required: true, defaultValue: "[today]" },
     { name: "Descrizione", label: "Descrizione", kind: "note", required: true },
-    { name: "Chiuso", label: "Chiuso", kind: "boolean", required: false },
+    { name: "Stato", label: "Stato", kind: "choice", required: false, choices: ["Aperto", "In lavorazione", "Chiuso"] },
     { name: "DataChiusura", label: "Data chiusura", kind: "date", required: false },
   ]),
 };

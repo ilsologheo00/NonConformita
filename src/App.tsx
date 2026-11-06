@@ -46,6 +46,8 @@ interface FormDef {
   itemTitle: string;
   /** The item is masculine ("il reclamo"): "creato", "registrato"... instead of "creata". */
   masculine?: boolean;
+  /** The item is closed through its "Stato" choice column, not a "Chiuso" yes/no switch. */
+  closedByStatus?: boolean;
 }
 
 /** The ending that agrees with the form's item: "a" for "la non conformità", "o" for "il reclamo". */
@@ -55,7 +57,7 @@ const forms: Record<FormView, FormDef> = {
   form: { list: config.list, envKey: "VITE_SP_LIST", title: "Nuova non conformità", sent: "Non conformità inviata", noun: "la non conformità", itemTitle: "Non conformità" },
   actions: { list: config.actionsList, envKey: "VITE_SP_ACTIONS_LIST", title: "Nuova azione correttiva / miglioramento", sent: "Azione inviata", noun: "l'azione", itemTitle: "Azione" },
   activities: { list: config.activitiesList, envKey: "VITE_SP_ACTIVITIES_LIST", title: "Nuova attività proposta", sent: "Attività inviata", noun: "l'attività", itemTitle: "Attività proposta" },
-  complaints: { list: config.complaintsList, envKey: "VITE_SP_COMPLAINTS_LIST", title: "Nuovo reclamo commerciale", sent: "Reclamo inviato", noun: "il reclamo", itemTitle: "Reclamo commerciale", masculine: true },
+  complaints: { list: config.complaintsList, envKey: "VITE_SP_COMPLAINTS_LIST", title: "Nuovo reclamo commerciale", sent: "Reclamo inviato", noun: "il reclamo", itemTitle: "Reclamo commerciale", masculine: true, closedByStatus: true },
 };
 
 const sample = (key: FormView) => () => import("./preview").then((m) => ({ schema: m.previewSchemas[key], items: key === "form" ? m.previewItems : [] }));
@@ -342,14 +344,18 @@ function today(kind: "date" | "datetime") {
  * The "Chiusa" switch, the closing-date column it fills in and, where the list
  * has one, the "Verificatore" who checks the closing; recognised by their
  * display names since the columns are read from the list at runtime.
+ * byStatus: a "Stato" choice column takes the place of the switch.
  */
-function closingFields(schema: ListSchema) {
+function closingFields(schema: ListSchema, byStatus = false) {
   const norm = (s: string) => s.trim().toLowerCase();
-  const closed = schema.fields.find((f) => f.kind === "boolean" && /^chius[ao]\??$/.test(norm(f.label)));
+  const closed = schema.fields.find((f) => (byStatus ? f.kind === "choice" && norm(f.label) === "stato" : f.kind === "boolean" && /^chius[ao]\??$/.test(norm(f.label))));
   const date = schema.fields.find((f) => (f.kind === "date" || f.kind === "datetime") && /chiusura/.test(norm(f.label)));
   const verifier = schema.fields.find((f) => /^verificator[ei]$/.test(norm(f.label)));
   return closed && date ? { closed: closed.name, date: date.name, dateKind: date.kind as "date" | "datetime", verifier: verifier?.name } : null;
 }
+
+/** The value that means closed: the switch turned on, or "Stato" set to "Chiuso". */
+const isClosed = (v: FieldValue | undefined) => v === true || (typeof v === "string" && /^chius[ao]$/i.test(v.trim()));
 
 /** The verifier is asked right after "Chiusa", before the closing date. */
 function withClosingOrder(schema: ListSchema): ListSchema {
@@ -399,9 +405,9 @@ function hiddenDefect(defect: NonNullable<ReturnType<typeof defectFields>>, valu
  * The closing date and the verifier are shown (and required, if the column is) only once the item is marked closed;
  * only the defect column matching "Tipo NC" is shown.
  */
-function isHidden(schema: ListSchema, values: Record<string, FieldValue>, name: string): boolean {
-  const closing = closingFields(schema);
-  if (closing && (name === closing.date || name === closing.verifier) && values[closing.closed] !== true) return true;
+function isHidden(schema: ListSchema, values: Record<string, FieldValue>, name: string, byStatus = false): boolean {
+  const closing = closingFields(schema, byStatus);
+  if (closing && (name === closing.date || name === closing.verifier) && !isClosed(values[closing.closed])) return true;
   const defect = defectFields(schema);
   return !!defect && name === hiddenDefect(defect, values);
 }
@@ -564,7 +570,7 @@ function ListForm({
   }, [status, link]);
 
   const schema = status.kind === "ready" ? status.schema : null;
-  const missingRequired = useMemo(() => (schema ? schema.fields.filter((f) => f.required && f.kind !== "boolean" && !isHidden(schema, values, f.name) && isEmpty(values[f.name])) : []), [schema, values]);
+  const missingRequired = useMemo(() => (schema ? schema.fields.filter((f) => f.required && f.kind !== "boolean" && !isHidden(schema, values, f.name, def.closedByStatus) && isEmpty(values[f.name])) : []), [schema, values, def]);
   const dirty = useMemo(() => (schema && item ? changedFields(schema, item, values).size > 0 : false), [schema, item, values]);
 
   if (status.kind === "loading") return <div className="page"><p className="muted">{editId ? `Lettura dell'elemento ${editId} da SharePoint…` : "Lettura dei campi dalla lista SharePoint…"}</p></div>;
@@ -597,16 +603,16 @@ function ListForm({
 
   const s = status.schema;
 
-  const closing = closingFields(s);
+  const closing = closingFields(s, def.closedByStatus);
   const defect = defectFields(s);
 
   function set(name: string, v: FieldValue) {
     setValues((prev) => {
       const next = { ...prev, [name]: v };
-      // Switching "Chiusa" on stamps the closing date with this moment; off clears it.
-      if (closing && name === closing.closed) next[closing.date] = v === true ? today(closing.dateKind) : "";
+      // Closing the item stamps the closing date with this moment; reopening clears it.
+      if (closing && name === closing.closed) next[closing.date] = isClosed(v) ? today(closing.dateKind) : "";
       // Reopening clears the verifier too, so a hidden name is not sent.
-      if (closing?.verifier && name === closing.closed && v !== true) next[closing.verifier] = initialValues(s)[closing.verifier];
+      if (closing?.verifier && name === closing.closed && !isClosed(v)) next[closing.verifier] = initialValues(s)[closing.verifier];
       // Changing "Tipo NC" clears the defect column that no longer applies, so it is not sent.
       if (defect && name === defect.type) {
         const off = hiddenDefect(defect, next);
@@ -616,7 +622,7 @@ function ListForm({
     });
     setSaved(false);
     if (errors[name]) setErrors(({ [name]: _, ...rest }) => rest);
-    if (closing && name === closing.closed && v === true && errors[closing.date]) setErrors(({ [closing.date]: _, ...rest }) => rest);
+    if (closing && name === closing.closed && isClosed(v) && errors[closing.date]) setErrors(({ [closing.date]: _, ...rest }) => rest);
   }
 
   function focusField(name: string) {
@@ -756,7 +762,7 @@ function ListForm({
       )}
 
       <div className="sheet">
-        {s.fields.filter((f) => !isHidden(s, values, f.name)).map((f) => (
+        {s.fields.filter((f) => !isHidden(s, values, f.name, def.closedByStatus)).map((f) => (
           <FieldInput key={f.name} field={f} value={values[f.name]} error={errors[f.name]} siteId={s.siteId} getToken={token} refreshKey={shown} onChange={(v) => set(f.name, v)} />
         ))}
         {s.skipped.length > 0 && <p className="field-hint">Non compilabili da qui: {s.skipped.join(", ")}. Puoi completarli direttamente su SharePoint.</p>}
