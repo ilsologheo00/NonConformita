@@ -52,6 +52,10 @@ export interface Field {
   lookupListId?: string;
   lookupColumn?: string;
   defaultValue?: string;
+  /** Options read from the Title column of another list of the site ("Elenco Fornitori"), in place of the column's own choices. */
+  sourceList?: string;
+  /** Shown but not editable (the order's delivery date, fixed to the day it is created). */
+  locked?: boolean;
 }
 
 export interface ListSchema {
@@ -251,6 +255,20 @@ export async function loadLookupOptions(token: string, siteId: string, listId: s
     return { id: i.id, label: byId ? (value && value !== i.id ? `${i.id} – ${value}` : i.id) : value || `#${i.id}` };
   });
   return byId ? options.sort((a, b) => Number(b.id) - Number(a.id)) : options.sort((a, b) => a.label.localeCompare(b.label, "it"));
+}
+
+/**
+ * The Title values of a list named by display name (or GUID), for a column
+ * that takes its options from another list without being a lookup.
+ */
+export async function loadListTitles(token: string, siteId: string, listName: string): Promise<string[]> {
+  const lists = await graphAll<{ id: string; displayName: string }>(token, `/sites/${siteId}/lists?$select=id,displayName`);
+  const wanted = listName.trim().toLowerCase();
+  const list = lists.find((l) => l.id.toLowerCase() === wanted) ?? lists.find((l) => l.displayName.trim().toLowerCase() === wanted);
+  if (!list) throw new Error(`La lista “${listName}” non esiste sul sito “${config.site}”.`);
+  const items = await graphAll<{ fields: { Title?: string } }>(token, `/sites/${siteId}/lists/${list.id}/items?$expand=fields($select=Title)&$top=999`);
+  const titles = new Set(items.map((i) => i.fields.Title?.trim() ?? "").filter(Boolean));
+  return [...titles].sort((a, b) => a.localeCompare(b, "it"));
 }
 
 /* ---- Create -------------------------------------------------------------- */

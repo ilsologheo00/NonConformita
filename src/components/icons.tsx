@@ -99,3 +99,10 @@ export const ComplaintIcon = () => (
     <path d="M12 7v4M12 14h.01" />
   </svg>
 );
+
+export const OrderIcon = () => (
+  <svg {...base}>
+    <path d="M21 8l-9-5-9 5v8l9 5 9-5z" />
+    <path d="M3 8l9 5 9-5M12 13v8" />
+  </svg>
+);

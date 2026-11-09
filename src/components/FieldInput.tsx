@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { loadLookupOptions, type Field, type FieldValue, type LookupOption, type Person } from "../graph/sharepoint";
+import { loadListTitles, loadLookupOptions, type Field, type FieldValue, type LookupOption, type Person } from "../graph/sharepoint";
 import { PeoplePicker } from "./PeoplePicker";
 import { isOperatorField, useOperators } from "../operators/OperatorsContext";
 
@@ -85,6 +85,10 @@ function Control({
   onChange: (v: FieldValue) => void;
 }) {
   const str = typeof value === "string" ? value : "";
+
+  if (f.locked) return <input {...common} className={f.kind === "date" || f.kind === "datetime" ? "input-date" : undefined} type={f.kind === "date" ? "date" : f.kind === "datetime" ? "datetime-local" : "text"} value={str} readOnly />;
+
+  if (f.sourceList && (f.kind === "text" || f.kind === "choice")) return <SourceListSelect f={f} value={str} common={common} siteId={siteId} getToken={getToken} refreshKey={refreshKey} onChange={onChange} />;
 
   if ((f.kind === "text" || f.kind === "choice") && isOperatorField(f.label)) return <OperatorSelect f={f} value={str} common={common} onChange={onChange} />;
 
@@ -216,6 +220,61 @@ function RadioChoice({ f, value, describedBy, onChange }: { f: Field; value: str
         </label>
       ))}
     </div>
+  );
+}
+
+/** A text or choice column whose options are the names in another list ("Fornitore" from "Elenco Fornitori"). */
+function SourceListSelect({
+  f,
+  value,
+  common,
+  siteId,
+  getToken,
+  refreshKey,
+  onChange,
+}: {
+  f: Field;
+  value: string;
+  common: Record<string, unknown>;
+  siteId: string;
+  getToken: () => Promise<string>;
+  refreshKey?: number;
+  onChange: (v: FieldValue) => void;
+}) {
+  const [options, setOptions] = useState<string[] | null>(null);
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    let alive = true;
+    getToken()
+      .then((t) => (siteId === "preview" ? ["Metalli Srl", "Plastiche Nord SpA", "Viteria Rossi"] : loadListTitles(t, siteId, f.sourceList!)))
+      .then((o) => {
+        if (!alive) return;
+        setOptions(o);
+        setErr("");
+      })
+      .catch((e) => alive && setErr((e as Error).message));
+    return () => {
+      alive = false;
+    };
+  }, [f.sourceList, siteId, getToken, refreshKey]);
+
+  if (err) return <p className="field-error">Valori non caricati: {err}</p>;
+
+  // A value saved before the supplier left the list is still shown.
+  const all = options && value && !options.includes(value) ? [value, ...options] : options;
+  return (
+    <>
+      <select {...common} value={value} onChange={(e) => onChange(e.target.value)} disabled={!options}>
+        <option value="">{options ? "Seleziona…" : "Caricamento valori…"}</option>
+        {all?.map((o) => (
+          <option key={o} value={o}>
+            {o}
+          </option>
+        ))}
+      </select>
+      {options?.length === 0 && <p className="field-hint operator-hint">Nessun nome nella lista “{f.sourceList}”: aggiungili su SharePoint.</p>}
+    </>
   );
 }
 

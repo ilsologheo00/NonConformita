@@ -56,6 +56,22 @@ Gli operatori si aggiungono dall'app (in basso a sinistra) o direttamente nella
 lista. Chi usa l'app deve poter modificare la lista. Per un nome diverso,
 impostare `VITE_SP_OPERATORS_LIST`.
 
+### Tracciamento ordini ed elenco fornitori
+
+Il modulo *Nuovo ordine* scrive nella lista `Tracciamento Ordini`
+(`VITE_SP_ORDERS_LIST`). Nel modulo:
+
+- **Fornitore** propone i nomi della colonna *Titolo* della lista
+  `Elenco Fornitori` (`VITE_SP_SUPPLIERS_LIST`), da creare sullo stesso sito
+  come elenco vuoto: un fornitore per riga, nome nel *Titolo*. Se la colonna è
+  di tipo *Scelta*, conviene attivare “Consenti valori di riempimento” così
+  SharePoint accetta anche i fornitori aggiunti dopo; se è una *Ricerca*
+  sull'elenco fornitori funziona allo stesso modo.
+- **Data consegna** è fissata al giorno in cui l'ordine viene creato e non si modifica.
+- **NC a Fornitore?** = *Sì*: dopo l'invio si apre il modulo *Nuova non
+  conformità* con *Tipo NC* = “NC a fornitore” e, se la NC ha una colonna
+  *Fornitore*, lo stesso fornitore dell'ordine.
+
 ## 3. Avviare
 
 ```powershell

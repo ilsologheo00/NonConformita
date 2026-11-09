@@ -18,6 +18,9 @@ export const config = {
   actionsList: read("VITE_SP_ACTIONS_LIST") || "Azioni Correttive/Miglioramenti",
   activitiesList: read("VITE_SP_ACTIVITIES_LIST") || "Attività proposte",
   complaintsList: read("VITE_SP_COMPLAINTS_LIST") || "Reclami commerciali",
+  ordersList: read("VITE_SP_ORDERS_LIST") || "Tracciamento Ordini",
+  /** Supplier names (column Title) offered in the "Fornitore" column of the orders. */
+  suppliersList: read("VITE_SP_SUPPLIERS_LIST") || "Elenco Fornitori",
   fields: read("VITE_SP_FIELDS")
     .split(",")
     .map((f) => f.trim())

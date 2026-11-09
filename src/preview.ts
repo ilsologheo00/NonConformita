@@ -33,7 +33,7 @@ export const previewSchema: ListSchema = {
 const sampleList = (listName: string, fields: ListSchema["fields"]): ListSchema => ({ siteId: "preview", listId: "preview", listName, listUrl: "#", skipped: [], fields });
 
 /** Sample fields per form, keyed like the app's views. */
-export const previewSchemas: Record<"form" | "actions" | "activities" | "complaints", ListSchema> = {
+export const previewSchemas: Record<"form" | "actions" | "activities" | "complaints" | "orders", ListSchema> = {
   form: previewSchema,
   actions: sampleList("Anteprima azioni (campi di esempio)", [
     { name: "Title", label: "Titolo", kind: "text", required: true, maxLength: 255 },
@@ -61,6 +61,13 @@ export const previewSchemas: Record<"form" | "actions" | "activities" | "complai
     { name: "Descrizione", label: "Descrizione", kind: "note", required: true },
     { name: "Stato", label: "Stato", kind: "choice", required: false, choices: ["Aperto", "In lavorazione", "Chiuso"] },
     { name: "DataChiusura", label: "Data chiusura", kind: "date", required: false },
+  ]),
+  orders: sampleList("Anteprima ordini (campi di esempio)", [
+    { name: "Title", label: "Numero ordine", kind: "text", required: true, maxLength: 255 },
+    { name: "Fornitore", label: "Fornitore", kind: "choice", required: true, choices: ["Metalli Srl"] },
+    { name: "DataConsegna", label: "Data consegna", kind: "date", required: false },
+    { name: "Note", label: "Note", kind: "note", required: false },
+    { name: "NCFornitore", label: "NC a Fornitore?", kind: "choice", radio: true, required: false, choices: ["Si", "No"] },
   ]),
 };
 

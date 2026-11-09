@@ -23,14 +23,14 @@ import { GraphError } from "./graph/client";
 import { FieldInput } from "./components/FieldInput";
 import { useTheme } from "./theme/ThemeContext";
 import { ListView, type ListDef, type RelatedDef } from "./components/ListView";
-import { ActionIcon, ActivityIcon, CheckIcon, ComplaintIcon, FormIcon, ListIcon, MoonIcon, PeopleIcon, SignOutIcon, SunIcon } from "./components/icons";
+import { ActionIcon, ActivityIcon, CheckIcon, ComplaintIcon, FormIcon, ListIcon, MoonIcon, OrderIcon, PeopleIcon, SignOutIcon, SunIcon } from "./components/icons";
 import { OperatorsDialog } from "./operators/OperatorsDialog";
 import { isOperatorField, useOperators } from "./operators/OperatorsContext";
 
 const isPreview = import.meta.env.DEV && new URLSearchParams(window.location.search).has("anteprima");
 
-type ListPage = "list" | "actionsList" | "activitiesList" | "complaintsList";
-type View = "form" | "actions" | "activities" | "complaints" | ListPage;
+type ListPage = "list" | "actionsList" | "activitiesList" | "complaintsList" | "ordersList";
+type View = "form" | "actions" | "activities" | "complaints" | "orders" | ListPage;
 type FormView = Exclude<View, ListPage>;
 
 /** The SharePoint lists the app can add items to, one form each. */
@@ -48,6 +48,10 @@ interface FormDef {
   masculine?: boolean;
   /** The item is closed through its "Stato" choice column, not a "Chiuso" yes/no switch. */
   closedByStatus?: boolean;
+  /** Columns, by display name, that take their options from another list's Title column. */
+  sources?: { label: RegExp; list: string }[];
+  /** Date column, by display name, fixed to the day the item is created. */
+  createdOn?: RegExp;
 }
 
 /** The ending that agrees with the form's item: "a" for "la non conformità", "o" for "il reclamo". */
@@ -58,6 +62,17 @@ const forms: Record<FormView, FormDef> = {
   actions: { list: config.actionsList, envKey: "VITE_SP_ACTIONS_LIST", title: "Nuova azione correttiva / miglioramento", sent: "Azione inviata", noun: "l'azione", itemTitle: "Azione" },
   activities: { list: config.activitiesList, envKey: "VITE_SP_ACTIVITIES_LIST", title: "Nuova attività proposta", sent: "Attività inviata", noun: "l'attività", itemTitle: "Attività proposta" },
   complaints: { list: config.complaintsList, envKey: "VITE_SP_COMPLAINTS_LIST", title: "Nuovo reclamo commerciale", sent: "Reclamo inviato", noun: "il reclamo", itemTitle: "Reclamo commerciale", masculine: true, closedByStatus: true },
+  orders: {
+    list: config.ordersList,
+    envKey: "VITE_SP_ORDERS_LIST",
+    title: "Nuovo ordine",
+    sent: "Ordine inviato",
+    noun: "l'ordine",
+    itemTitle: "Ordine",
+    masculine: true,
+    sources: [{ label: /^fornitore$/, list: config.suppliersList }],
+    createdOn: /^data\s+(di\s+)?consegna$/,
+  },
 };
 
 const sample = (key: FormView) => () => import("./preview").then((m) => ({ schema: m.previewSchemas[key], items: key === "form" ? m.previewItems : [] }));
@@ -82,10 +97,11 @@ const listPages: Record<ListPage, ListDef & { nav: string }> = {
   },
   activitiesList: { list: config.activitiesList, title: "Elenco attività proposte", nav: "Elenco attività proposte", items: "attività", preview: sample("activities") },
   complaintsList: { list: config.complaintsList, title: "Elenco reclami commerciali", nav: "Elenco reclami commerciali", items: "reclami", preview: sample("complaints") },
+  ordersList: { list: config.ordersList, title: "Tracciamento ordini", nav: "Tracciamento ordini", items: "ordini", preview: sample("orders") },
 };
 
 /** The form each list page edits its items with. */
-const formOf: Record<ListPage, FormView> = { list: "form", actionsList: "actions", activitiesList: "activities", complaintsList: "complaints" };
+const formOf: Record<ListPage, FormView> = { list: "form", actionsList: "actions", activitiesList: "activities", complaintsList: "complaints", ordersList: "orders" };
 const isListPage = (v: View): v is ListPage => v in formOf;
 const pageOfList = (list: string) => (Object.keys(listPages) as ListPage[]).find((k) => listPages[k].list === list);
 
@@ -128,7 +144,10 @@ function Views({ view, account, onView, details, openItem }: Nav & { account: Ac
     (from: FormView, id: string, schema: ListSchema, values: Record<string, FieldValue>) => {
       const next = followUps[from];
       if (!next || !switchedOn(schema, values, next.flag)) return;
-      setLinks((l) => ({ ...l, [next.view]: { id, listId: schema.listId, noun: next.linkedNoun, seq: (l[next.view]?.seq ?? 0) + 1 } }));
+      setLinks((l) => ({
+        ...l,
+        [next.view]: { id, listId: schema.listId, noun: next.linkedNoun, masculine: forms[from].masculine, fill: next.fill?.(schema, values), seq: (l[next.view]?.seq ?? 0) + 1 },
+      }));
       onView(next.view);
       window.scrollTo(0, 0);
     },
@@ -225,6 +244,10 @@ function Shell({ view, onView, children }: { view: View; onView: (v: View) => vo
           <button type="button" className={`sidebar-link${view === "complaints" ? " active" : ""}`} aria-current={view === "complaints" ? "page" : undefined} onClick={() => onView("complaints")}>
             <ComplaintIcon />
             Nuovo reclamo commerciale
+          </button>
+          <button type="button" className={`sidebar-link${view === "orders" ? " active" : ""}`} aria-current={view === "orders" ? "page" : undefined} onClick={() => onView("orders")}>
+            <OrderIcon />
+            Nuovo ordine
           </button>
         </nav>
         <div className="sidebar-footer">
@@ -383,6 +406,25 @@ function withRequiredFields(schema: ListSchema): ListSchema {
   return { ...schema, fields: schema.fields.map((f) => (isTypeField(f) || isOperatorField(f.label) ? { ...f, required: true } : f)) };
 }
 
+/**
+ * Per form: the columns that list another list's names ("Fornitore" from
+ * "Elenco Fornitori") and the date that is always the creation day ("Data consegna").
+ */
+function withFormRules(def: FormDef) {
+  return (schema: ListSchema): ListSchema => {
+    const label = (f: ListSchema["fields"][number]) => f.label.trim().toLowerCase();
+    return {
+      ...schema,
+      fields: schema.fields.map((f) => {
+        const source = (f.kind === "text" || f.kind === "choice") && def.sources?.find((s) => s.label.test(label(f)));
+        if (source) return { ...f, sourceList: source.list };
+        if ((f.kind === "date" || f.kind === "datetime") && def.createdOn?.test(label(f))) return { ...f, locked: true, defaultValue: "[today]" };
+        return f;
+      }),
+    };
+  };
+}
+
 function defectFields(schema: ListSchema) {
   const norm = (s: string) => s.trim().toLowerCase();
   const type = schema.fields.find(isTypeField);
@@ -430,13 +472,40 @@ function explain(e: unknown, def: Pick<FormDef, "list" | "envKey"> = forms.form,
 /**
  * The form that opens after an item is sent, linked to it. flag matches the
  * label of the yes/no column that asks for it ("Crea azione correttiva");
- * without one it always opens.
+ * without one it always opens. fill gives the values the new item starts with.
  */
-const followUps: Partial<Record<FormView, { view: FormView; flag?: RegExp; linkedNoun: string }>> = {
+type FollowUp = { view: FormView; flag?: RegExp; linkedNoun: string; fill?: (from: ListSchema, values: Record<string, FieldValue>) => Fill };
+const followUps: Partial<Record<FormView, FollowUp>> = {
   form: { view: "actions", flag: /azion[ei]\s+correttiv/, linkedNoun: "alla non conformità" },
   actions: { view: "activities", linkedNoun: "all'azione" },
   activities: { view: "actions", flag: /nuova\s+azion[ei]\s+correttiv/, linkedNoun: "all'attività" },
+  orders: { view: "form", flag: /^nc\s+al?\s+fornitore\??$/, linkedNoun: "all'ordine", fill: (from, values) => supplierNc(from, values) },
 };
+
+/** Values for the form that follows, given its columns. */
+type Fill = (schema: ListSchema) => Record<string, FieldValue>;
+
+const isSupplierField = (f: ListSchema["fields"][number]) => /^fornitore$/.test(f.label.trim().toLowerCase());
+
+/** An NC opened from an order: "Tipo NC" set to "NC a fornitore", and the order's supplier carried over where the NC has the column. */
+function supplierNc(from: ListSchema, values: Record<string, FieldValue>): Fill {
+  const source = from.fields.find(isSupplierField);
+  const supplier = source ? values[source.name] : undefined;
+  return (schema) => {
+    const out: Record<string, FieldValue> = {};
+    const type = schema.fields.find(isTypeField);
+    const choice = type?.choices?.find((c) => /^nc\s+al?\s+fornitor/i.test(c.trim())) ?? type?.choices?.find((c) => /fornitor/i.test(c));
+    if (type && choice) out[type.name] = type.kind === "multichoice" ? [choice] : choice;
+    const target = schema.fields.find(isSupplierField);
+    if (target && source && typeof supplier === "string" && supplier) {
+      const sameLookup = target.kind === "lookup" && source.kind === "lookup" && sameList(target.lookupListId, source.lookupListId);
+      const asText = source.kind !== "lookup" && (target.kind === "text" || (target.kind === "choice" && (target.allowTextEntry || target.choices?.includes(supplier))));
+      if (sameLookup) out[target.name] = target.multiple ? [supplier] : supplier;
+      else if (asText) out[target.name] = supplier;
+    }
+    return out;
+  };
+}
 
 /** The flag is a yes/no column, or a choice column answered "Sì". */
 function switchedOn(schema: ListSchema, values: Record<string, FieldValue>, label?: RegExp): boolean {
@@ -451,7 +520,7 @@ function switchedOn(schema: ListSchema, values: Record<string, FieldValue>, labe
 const linkField = (schema: ListSchema, link: Link) => schema.fields.find((f) => f.kind === "lookup" && sameList(f.lookupListId, link.listId));
 
 /** An item to link a new one to; seq tells two requests for the same item apart. */
-type Link = { id: string; listId: string; noun: string; seq: number };
+type Link = { id: string; listId: string; noun: string; masculine?: boolean; fill?: Fill; seq: number };
 
 /** A linked item ("NC collegata" → its actions) opens in its own list page. */
 function openRelated(openItem: OpenItem, list: string, id: string) {
@@ -511,6 +580,7 @@ function ListForm({
     load
       .then(withRequiredFields)
       .then(withClosingOrder)
+      .then(withFormRules(def))
       .then(async (schema) => {
         if (!editId) return { schema, item: null };
         if (!account) return { schema, item: { id: editId, eTag: "", webUrl: "#", values: initialValues(schema) } };
@@ -561,12 +631,16 @@ function ListForm({
     appliedLink.current = link.seq;
     const field = linkField(status.schema, link);
     const fresh = initialValues(status.schema);
+    const filled = link.fill?.(status.schema) ?? {};
+    Object.assign(fresh, filled);
     if (field) fresh[field.name] = field.multiple ? [link.id] : link.id;
     setValues(fresh);
     setErrors({});
     setSendError("");
     setCreated(null);
-    setLinkedTo(field ? `${link.noun} n. ${link.id}` : "");
+    const just = `n. ${link.id} appena inserit${link.masculine ? "o" : "a"}`;
+    // "all'ordine" -> "dall'ordine", "alla non conformità" -> "dalla non conformità".
+    setLinkedTo(field ? `Collegata ${link.noun} ${just}.` : Object.keys(filled).length ? `Compilata d${link.noun} ${just}.` : "");
   }, [status, link]);
 
   const schema = status.kind === "ready" ? status.schema : null;
@@ -757,7 +831,7 @@ function ListForm({
           </a>
           . I campi con <span className="req-mark">*</span> sono obbligatori.
         </p>
-        {linkedTo && <p className="notice">Collegata {linkedTo} appena inserita.</p>}
+        {linkedTo && <p className="notice">{linkedTo}</p>}
       </header>
       )}
 
