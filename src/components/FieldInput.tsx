@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { loadListTitles, loadLookupOptions, type Field, type FieldValue, type LookupOption, type Person } from "../graph/sharepoint";
+import { loadListTitles, loadLookupOptions, lookupById, type Field, type FieldValue, type LookupOption, type Person } from "../graph/sharepoint";
 import { PeoplePicker } from "./PeoplePicker";
 import { isOperatorField, useOperators } from "../operators/OperatorsContext";
 
@@ -299,7 +299,7 @@ function LookupControl({
   const [err, setErr] = useState("");
 
   // "NC collegata", "Azione collegata" and the like point at records: newest first, with their ID.
-  const byId = /^(nc|azion[ei])\b/.test(f.label.trim().toLowerCase());
+  const byId = lookupById(f);
 
   useEffect(() => {
     let alive = true;

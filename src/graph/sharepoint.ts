@@ -241,6 +241,9 @@ export interface LookupOption {
   label: string;
 }
 
+/** "NC collegata", "Azione collegata" and the like point at records: shown with their ID. */
+export const lookupById = (f: Field) => /^(nc|azion[ei])\b/.test(f.label.trim().toLowerCase());
+
 /**
  * Values of a lookup column. byId puts the newest item first and prefixes its
  * ID, for lookups on records such as the non-conformities themselves.
@@ -492,7 +495,7 @@ type LookupValue = { LookupId?: number | string; LookupValue?: string; Email?: s
 const dateFmt = new Intl.DateTimeFormat("it-IT", { dateStyle: "short" });
 const dateTimeFmt = new Intl.DateTimeFormat("it-IT", { dateStyle: "short", timeStyle: "short" });
 
-function cell(f: Field, raw: Record<string, unknown>, people: Map<string, string>): [string, string | number] {
+function cell(f: Field, raw: Record<string, unknown>, people: Map<string, string>, lookups: Map<string, string> | undefined): [string, string | number] {
   const v = raw[f.name];
   const lookupId = raw[`${f.name}LookupId`];
   if (Array.isArray(v)) {
@@ -514,7 +517,8 @@ function cell(f: Field, raw: Record<string, unknown>, people: Map<string, string
       return [name, name.toLowerCase()];
     }
     case "lookup": {
-      const text = typeof v === "string" ? v : lookupId !== undefined ? `#${lookupId}` : "";
+      // Graph only gives the id of a single lookup: the name comes from the list it points at.
+      const text = typeof v === "string" ? v : lookupId !== undefined && lookupId !== null ? lookups?.get(String(lookupId)) ?? `#${lookupId}` : "";
       return [text, text.toLowerCase()];
     }
     case "url": {
@@ -534,9 +538,38 @@ function cell(f: Field, raw: Record<string, unknown>, people: Map<string, string
   }
 }
 
+/**
+ * Id -> displayed value of each single lookup column ("Fornitore" -> supplier name).
+ * A list that cannot be read leaves its column showing the ids.
+ */
+async function lookupNames(token: string, schema: ListSchema): Promise<Map<string, Map<string, string>>> {
+  const out = new Map<string, Map<string, string>>();
+  const loads = new Map<string, Promise<Map<string, string> | undefined>>();
+  await Promise.all(
+    schema.fields
+      .filter((f) => f.kind === "lookup" && !f.multiple && f.lookupListId && f.lookupColumn)
+      .map(async (f) => {
+        const key = `${f.lookupListId}|${f.lookupColumn}|${lookupById(f)}`;
+        let load = loads.get(key);
+        if (!load) {
+          load = loadLookupOptions(token, schema.siteId, f.lookupListId!.replace(/[{}]/g, ""), f.lookupColumn!, lookupById(f))
+            .then((o) => new Map(o.map((x) => [x.id, x.label])))
+            .catch((e) => {
+              console.warn(`Valori della colonna “${f.label}” non caricati`, e);
+              return undefined;
+            });
+          loads.set(key, load);
+        }
+        const names = await load;
+        if (names) out.set(f.name, names);
+      })
+  );
+  return out;
+}
+
 /** Every item of the list, with the form's columns turned into readable text. */
 export async function loadItems(token: string, schema: ListSchema): Promise<ListItem[]> {
-  const [items, people] = await Promise.all([
+  const [items, people, lookups] = await Promise.all([
     graphAll<{ id: string; createdDateTime: string; createdBy?: { user?: { displayName?: string } }; fields: Record<string, unknown> }>(
       token,
       `/sites/${schema.siteId}/lists/${schema.listId}/items?$expand=fields&$top=500`
@@ -547,6 +580,7 @@ export async function loadItems(token: string, schema: ListSchema): Promise<List
           .then((id) => graphAll<{ id: string; fields: { Title?: string } }>(token, `/sites/${schema.siteId}/lists/${id}/items?$expand=fields($select=Title)&$top=999`))
           .then((users) => new Map(users.map((u) => [u.id, u.fields.Title ?? `#${u.id}`])))
       : Promise.resolve(new Map<string, string>()),
+    lookupNames(token, schema),
   ]);
 
   return items.map((i) => {
@@ -554,7 +588,7 @@ export async function loadItems(token: string, schema: ListSchema): Promise<List
     const sort: Record<string, string | number> = {};
     const ids: Record<string, string[]> = {};
     for (const f of schema.fields) {
-      [text[f.name], sort[f.name]] = cell(f, i.fields, people);
+      [text[f.name], sort[f.name]] = cell(f, i.fields, people, lookups.get(f.name));
       if (f.kind === "lookup") ids[f.name] = lookupIds(f, i.fields);
     }
     const title = typeof i.fields.Title === "string" ? i.fields.Title : "";

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { deleteItem, loadItems, loadLinkedItems, loadSchema, type ListItem, type ListSchema } from "../graph/sharepoint";
 import { ExternalIcon, RefreshIcon, TrashIcon } from "./icons";
+import { workdaysBetween } from "../workdays";
 
 type Status = { kind: "loading" } | { kind: "error"; message: string } | { kind: "ready"; schema: ListSchema; items: ListItem[]; related: Related[] };
 type Column = { key: string; label: string; text: (i: ListItem) => string; sort: (i: ListItem) => string | number; links?: (i: ListItem) => { id: string; label: string; open: () => void }[] };
@@ -10,10 +11,32 @@ type Related = { key: string; list: string; label: string; byItem: Map<string, L
 
 const dateTimeFmt = new Intl.DateTimeFormat("it-IT", { dateStyle: "short", timeStyle: "short" });
 
-function columns(schema: ListSchema, related: Related[], openRelated: (list: string, id: string) => void): Column[] {
+/** Working days between two date columns of the row, shown right after the second one. */
+function workdaysColumn(schema: ListSchema, def: WorkdaysDef): { after: string; col: Column } | null {
+  const label = (f: ListSchema["fields"][number]) => f.label.trim().toLowerCase();
+  const isDate = (f: ListSchema["fields"][number]) => f.kind === "date" || f.kind === "datetime";
+  const from = schema.fields.find((f) => isDate(f) && def.from.test(label(f)));
+  const to = schema.fields.find((f) => isDate(f) && def.to.test(label(f)));
+  if (!from || !to) return null;
+  const days = (i: ListItem) => {
+    const a = i.sort[from.name];
+    const b = i.sort[to.name];
+    return typeof a === "string" && a && typeof b === "string" && b ? workdaysBetween(a, b) : null;
+  };
+  return {
+    after: to.name,
+    col: { key: "workdays", label: def.label, text: (i) => days(i)?.toLocaleString("it-IT") ?? "", sort: (i) => days(i) ?? "" },
+  };
+}
+
+function columns(schema: ListSchema, related: Related[], openRelated: (list: string, id: string) => void, workdays?: WorkdaysDef): Column[] {
+  const extra = workdays && workdaysColumn(schema, workdays);
   return [
     { key: "ID", label: "ID", text: (i) => i.id, sort: (i) => Number(i.id) },
-    ...schema.fields.map((f) => ({ key: f.name, label: f.label, text: (i: ListItem) => i.text[f.name], sort: (i: ListItem) => i.sort[f.name] })),
+    ...schema.fields.flatMap((f) => {
+      const col: Column = { key: f.name, label: f.label, text: (i: ListItem) => i.text[f.name], sort: (i: ListItem) => i.sort[f.name] };
+      return extra && extra.after === f.name ? [col, extra.col] : [col];
+    }),
     ...related.map((r) => {
       const of = (i: ListItem) => r.byItem.get(i.id) ?? [];
       const label = (x: ListItem) => (x.title ? `${x.id} – ${x.title}` : x.id);
@@ -36,6 +59,13 @@ export interface RelatedDef {
   label: string;
 }
 
+/** A computed column: working days from one date column to another, matched by display name. */
+export interface WorkdaysDef {
+  label: string;
+  from: RegExp;
+  to: RegExp;
+}
+
 /** What one list page shows; preview is the sample used with ?anteprima. */
 export interface ListDef {
   list: string;
@@ -43,6 +73,7 @@ export interface ListDef {
   /** Plural, lower case: "non conformità", "azioni". */
   items: string;
   related?: RelatedDef[];
+  workdays?: WorkdaysDef;
   preview: () => Promise<{ schema: ListSchema; items: ListItem[] }>;
 }
 
@@ -104,7 +135,7 @@ export function ListView({
     };
   }, [def, active, reload, getToken, explain]);
 
-  const cols = useMemo(() => (status.kind === "ready" ? columns(status.schema, status.related, onOpenRelated) : []), [status, onOpenRelated]);
+  const cols = useMemo(() => (status.kind === "ready" ? columns(status.schema, status.related, onOpenRelated, def.workdays) : []), [status, onOpenRelated, def.workdays]);
   const rows = useMemo(() => {
     if (status.kind !== "ready") return [];
     const q = query.trim().toLowerCase();

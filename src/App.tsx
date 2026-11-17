@@ -97,7 +97,15 @@ const listPages: Record<ListPage, ListDef & { nav: string }> = {
   },
   activitiesList: { list: config.activitiesList, title: "Elenco attività proposte", nav: "Elenco attività proposte", items: "attività", preview: sample("activities") },
   complaintsList: { list: config.complaintsList, title: "Elenco reclami commerciali", nav: "Elenco reclami commerciali", items: "reclami", preview: sample("complaints") },
-  ordersList: { list: config.ordersList, title: "Tracciamento ordini", nav: "Tracciamento ordini", items: "ordini", preview: sample("orders") },
+  ordersList: {
+    list: config.ordersList,
+    title: "Tracciamento ordini",
+    nav: "Tracciamento ordini",
+    items: "ordini",
+    // Working days from the order to its delivery, after "Data consegna".
+    workdays: { label: "Giorni lavorativi", from: /^data\s+(di\s+|dell['’]\s*)?ordine$/, to: /^data\s+(di\s+)?consegna$/ },
+    preview: sample("orders"),
+  },
 };
 
 /** The form each list page edits its items with. */
