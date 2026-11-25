@@ -50,8 +50,8 @@ interface FormDef {
   closedByStatus?: boolean;
   /** Columns, by display name, that take their options from another list's Title column. */
   sources?: { label: RegExp; list: string }[];
-  /** Date column, by display name, fixed to the day the item is created. */
-  createdOn?: RegExp;
+  /** Date column, by display name, that starts at today's date but can still be changed. */
+  defaultsToToday?: RegExp;
 }
 
 /** The ending that agrees with the form's item: "a" for "la non conformità", "o" for "il reclamo". */
@@ -71,7 +71,7 @@ const forms: Record<FormView, FormDef> = {
     itemTitle: "Ordine",
     masculine: true,
     sources: [{ label: /^fornitore$/, list: config.suppliersList }],
-    createdOn: /^data\s+(di\s+)?consegna$/,
+    defaultsToToday: /^data\s+(di\s+)?(consegna|ricezione)$/,
   },
 };
 
@@ -416,7 +416,7 @@ function withRequiredFields(schema: ListSchema): ListSchema {
 
 /**
  * Per form: the columns that list another list's names ("Fornitore" from
- * "Elenco Fornitori") and the date that is always the creation day ("Data consegna").
+ * "Elenco Fornitori") and the date that starts at today but stays editable ("Data consegna").
  */
 function withFormRules(def: FormDef) {
   return (schema: ListSchema): ListSchema => {
@@ -426,7 +426,7 @@ function withFormRules(def: FormDef) {
       fields: schema.fields.map((f) => {
         const source = (f.kind === "text" || f.kind === "choice") && def.sources?.find((s) => s.label.test(label(f)));
         if (source) return { ...f, sourceList: source.list };
-        if ((f.kind === "date" || f.kind === "datetime") && def.createdOn?.test(label(f))) return { ...f, locked: true, defaultValue: "[today]" };
+        if ((f.kind === "date" || f.kind === "datetime") && def.defaultsToToday?.test(label(f))) return { ...f, defaultValue: "[today]" };
         return f;
       }),
     };
